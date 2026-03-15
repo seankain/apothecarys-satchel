@@ -1,0 +1,9 @@
+[package]
+name = "alsa-sys"
+version = "0.3.1"
+edition = "2021"
+description = "Stub replacement for alsa-sys that allows building without libasound2-dev installed. All functions return errors, causing Fyrox to gracefully skip audio initialization."
+links = "alsa"
+
+[dependencies]
+libc = "0.2"
