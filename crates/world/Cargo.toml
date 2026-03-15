@@ -5,3 +5,6 @@ edition = "2021"
 
 [dependencies]
 apothecarys-core = { path = "../core" }
+serde = { workspace = true }
+ron = { workspace = true }
+thiserror = "1"
