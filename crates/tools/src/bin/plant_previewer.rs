@@ -18,7 +18,7 @@ use fyrox::{
         camera::{CameraBuilder, OrthographicProjection, Projection},
         light::{directional::DirectionalLightBuilder, BaseLightBuilder},
         mesh::{
-            surface::{SurfaceBuilder, SurfaceData, SurfaceSharedData},
+            surface::{SurfaceBuilder, SurfaceData, SurfaceResource},
             MeshBuilder, RenderPath,
         },
         node::Node,
@@ -27,6 +27,7 @@ use fyrox::{
     },
     window::WindowAttributes,
 };
+use fyrox::asset::untyped::ResourceKind;
 
 use apothecarys_botany::turtle::Vec3 as BotanyVec3;
 use apothecarys_tools::plant_preview::PlantPreviewData;
@@ -196,7 +197,8 @@ impl PlantPreviewerPlugin {
         let brown = Color::opaque(101, 67, 33);
 
         MeshBuilder::new(BaseBuilder::new())
-            .with_surfaces(vec![SurfaceBuilder::new(SurfaceSharedData::new(
+            .with_surfaces(vec![SurfaceBuilder::new(SurfaceResource::new_ok(
+                ResourceKind::Embedded,
                 surface_data,
             ))
             .with_color(brown)
@@ -272,7 +274,8 @@ impl PlantPreviewerPlugin {
                     .build(),
             ),
         )
-        .with_surfaces(vec![SurfaceBuilder::new(SurfaceSharedData::new(
+        .with_surfaces(vec![SurfaceBuilder::new(SurfaceResource::new_ok(
+            ResourceKind::Embedded,
             surface_data,
         ))
         .with_color(color)
@@ -295,7 +298,8 @@ impl PlantPreviewerPlugin {
                     .build(),
             ),
         )
-        .with_surfaces(vec![SurfaceBuilder::new(SurfaceSharedData::new(
+        .with_surfaces(vec![SurfaceBuilder::new(SurfaceResource::new_ok(
+            ResourceKind::Embedded,
             surface_data,
         ))
         .with_color(ground_color)
