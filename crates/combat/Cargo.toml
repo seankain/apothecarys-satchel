@@ -5,3 +5,12 @@ edition = "2021"
 
 [dependencies]
 apothecarys-core = { path = "../core" }
+apothecarys-inventory = { path = "../inventory" }
+apothecarys-party = { path = "../party" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+rand = "0.8"
+
+[dev-dependencies]
+serde_json = { workspace = true }

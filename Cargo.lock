@@ -181,6 +181,12 @@ name = "apothecarys-combat"
 version = "0.1.0"
 dependencies = [
  "apothecarys-core",
+ "apothecarys-inventory",
+ "apothecarys-party",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -221,6 +227,7 @@ name = "apothecarys-inventory"
 version = "0.1.0"
 dependencies = [
  "apothecarys-core",
+ "ron",
  "serde",
  "serde_json",
  "uuid",
@@ -242,6 +249,11 @@ name = "apothecarys-party"
 version = "0.1.0"
 dependencies = [
  "apothecarys-core",
+ "apothecarys-inventory",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
