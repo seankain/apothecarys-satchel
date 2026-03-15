@@ -1,0 +1,132 @@
+[
+    (
+        id: "hub_town",
+        display_name: "Willowmere",
+        scene_path: "assets/scenes/hub_town.gltf",
+        location_type: Hub,
+        spawn_points: [
+            (
+                name: "from_garden",
+                position: (5.0, 0.0, 3.0),
+                rotation: 0.0,
+                spawn_type: PlayerArrival,
+            ),
+            (
+                name: "from_dungeon_1",
+                position: (12.0, 0.0, 8.0),
+                rotation: 3.14159,
+                spawn_type: PlayerArrival,
+            ),
+            (
+                name: "herbalist",
+                position: (8.0, 0.0, 6.0),
+                rotation: 1.57,
+                spawn_type: Npc(npc_id: "npc_herbalist"),
+            ),
+        ],
+        exits: [
+            (
+                target_location: "garden",
+                exit_node_name: "exit_to_garden",
+                arrival_spawn: "from_hub",
+            ),
+            (
+                target_location: "dungeon_floor_1",
+                exit_node_name: "exit_to_dungeon",
+                arrival_spawn: "entrance",
+            ),
+        ],
+    ),
+    (
+        id: "garden",
+        display_name: "Apothecary's Garden",
+        scene_path: "assets/scenes/garden.gltf",
+        location_type: Garden,
+        spawn_points: [
+            (
+                name: "from_hub",
+                position: (0.0, 0.0, 0.0),
+                rotation: 0.0,
+                spawn_type: PlayerArrival,
+            ),
+        ],
+        exits: [
+            (
+                target_location: "hub_town",
+                exit_node_name: "exit_to_hub",
+                arrival_spawn: "from_garden",
+            ),
+        ],
+    ),
+    (
+        id: "dungeon_floor_1",
+        display_name: "Darkroot Caverns - Floor 1",
+        scene_path: "assets/scenes/dungeon_f1.gltf",
+        location_type: Dungeon(floor: 1, difficulty: 1),
+        spawn_points: [
+            (
+                name: "entrance",
+                position: (0.0, 0.0, 0.0),
+                rotation: 0.0,
+                spawn_type: PlayerArrival,
+            ),
+            (
+                name: "from_floor_2",
+                position: (20.0, 0.0, 20.0),
+                rotation: 3.14159,
+                spawn_type: PlayerArrival,
+            ),
+            (
+                name: "goblin_patrol",
+                position: (10.0, 0.0, 8.0),
+                rotation: 0.0,
+                spawn_type: Enemy(template: "goblin_warrior"),
+            ),
+            (
+                name: "health_potion",
+                position: (15.0, 0.0, 5.0),
+                rotation: 0.0,
+                spawn_type: Item(item_id: "potion_heal_minor"),
+            ),
+        ],
+        exits: [
+            (
+                target_location: "hub_town",
+                exit_node_name: "exit_to_hub",
+                arrival_spawn: "from_dungeon_1",
+            ),
+            (
+                target_location: "dungeon_floor_2",
+                exit_node_name: "stairs_down",
+                arrival_spawn: "from_floor_1",
+            ),
+        ],
+    ),
+    (
+        id: "dungeon_floor_2",
+        display_name: "Darkroot Caverns - Floor 2",
+        scene_path: "assets/scenes/dungeon_f2.gltf",
+        location_type: Dungeon(floor: 2, difficulty: 3),
+        spawn_points: [
+            (
+                name: "from_floor_1",
+                position: (0.0, 0.0, 0.0),
+                rotation: 0.0,
+                spawn_type: PlayerArrival,
+            ),
+            (
+                name: "boss_spawn",
+                position: (25.0, 0.0, 25.0),
+                rotation: 0.0,
+                spawn_type: Enemy(template: "mushroom_guardian"),
+            ),
+        ],
+        exits: [
+            (
+                target_location: "dungeon_floor_1",
+                exit_node_name: "stairs_up",
+                arrival_spawn: "from_floor_2",
+            ),
+        ],
+    ),
+]

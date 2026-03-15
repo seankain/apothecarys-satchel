@@ -5,3 +5,10 @@ edition = "2021"
 
 [dependencies]
 apothecarys-core = { path = "../core" }
+mlua = { version = "0.10", features = ["lua54", "vendored", "send"] }
+serde = { workspace = true }
+thiserror = "1"
+notify = { version = "7", default-features = false, features = ["macos_fsevent"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
