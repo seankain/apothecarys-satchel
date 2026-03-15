@@ -1,0 +1,292 @@
+use crate::phenotype::PlantColor;
+use crate::turtle::Vec3;
+use serde::{Deserialize, Serialize};
+
+/// A vertex with position, normal, and UV coordinates.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Vertex {
+    pub position: Vec3,
+    pub normal: Vec3,
+    pub uv: [f32; 2],
+}
+
+/// A stem segment between two points with tapering width.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StemSegment {
+    pub start: Vec3,
+    pub end: Vec3,
+    pub start_width: f32,
+    pub end_width: f32,
+}
+
+/// An instanced mesh placement for leaves, flowers, or fruit.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MeshInstance {
+    pub position: Vec3,
+    pub direction: Vec3,
+    pub up: Vec3,
+    pub template_index: usize,
+    pub scale: f32,
+    pub color: PlantColor,
+}
+
+/// All mesh data for a generated plant.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PlantMeshData {
+    pub stem_segments: Vec<StemSegment>,
+    pub stem_vertices: Vec<Vertex>,
+    pub stem_indices: Vec<u32>,
+    pub leaf_instances: Vec<MeshInstance>,
+    pub flower_instances: Vec<MeshInstance>,
+    pub fruit_instances: Vec<MeshInstance>,
+}
+
+impl PlantMeshData {
+    pub fn new() -> Self {
+        Self {
+            stem_segments: Vec::new(),
+            stem_vertices: Vec::new(),
+            stem_indices: Vec::new(),
+            leaf_instances: Vec::new(),
+            flower_instances: Vec::new(),
+            fruit_instances: Vec::new(),
+        }
+    }
+
+    /// Build triangle mesh data from stem segments (generalized cylinders).
+    pub fn build_stem_mesh(&mut self, segments_around: u32) {
+        self.stem_vertices.clear();
+        self.stem_indices.clear();
+
+        for segment in &self.stem_segments {
+            let base_vertex = self.stem_vertices.len() as u32;
+            let direction = Vec3::new(
+                segment.end.x - segment.start.x,
+                segment.end.y - segment.start.y,
+                segment.end.z - segment.start.z,
+            )
+            .normalize();
+
+            // Find a perpendicular vector for the ring
+            let perp = find_perpendicular(direction);
+            let bitangent = direction.cross(perp).normalize();
+
+            // Generate rings at start and end
+            for ring in 0..2 {
+                let (center, width) = if ring == 0 {
+                    (segment.start, segment.start_width)
+                } else {
+                    (segment.end, segment.end_width)
+                };
+
+                for i in 0..segments_around {
+                    let angle = (i as f32 / segments_around as f32) * std::f32::consts::TAU;
+                    let cos_a = angle.cos();
+                    let sin_a = angle.sin();
+
+                    let normal = Vec3::new(
+                        perp.x * cos_a + bitangent.x * sin_a,
+                        perp.y * cos_a + bitangent.y * sin_a,
+                        perp.z * cos_a + bitangent.z * sin_a,
+                    );
+
+                    let position = center + normal.scale(width);
+                    let u = i as f32 / segments_around as f32;
+                    let v = ring as f32;
+
+                    self.stem_vertices.push(Vertex {
+                        position,
+                        normal,
+                        uv: [u, v],
+                    });
+                }
+            }
+
+            // Generate triangle indices connecting the two rings
+            for i in 0..segments_around {
+                let next = (i + 1) % segments_around;
+
+                // Ring 0 vertex indices
+                let a0 = base_vertex + i;
+                let a1 = base_vertex + next;
+                // Ring 1 vertex indices
+                let b0 = base_vertex + segments_around + i;
+                let b1 = base_vertex + segments_around + next;
+
+                // Two triangles per quad
+                self.stem_indices.extend_from_slice(&[a0, b0, a1]);
+                self.stem_indices.extend_from_slice(&[a1, b0, b1]);
+            }
+        }
+    }
+
+    /// Total vertex count in generated stem mesh.
+    pub fn vertex_count(&self) -> usize {
+        self.stem_vertices.len()
+    }
+
+    /// Total triangle count in generated stem mesh.
+    pub fn triangle_count(&self) -> usize {
+        self.stem_indices.len() / 3
+    }
+
+    /// Total number of instanced organs (leaves + flowers + fruit).
+    pub fn instance_count(&self) -> usize {
+        self.leaf_instances.len() + self.flower_instances.len() + self.fruit_instances.len()
+    }
+}
+
+impl Default for PlantMeshData {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Find a vector perpendicular to the given direction.
+fn find_perpendicular(dir: Vec3) -> Vec3 {
+    let candidate = if dir.y.abs() < 0.9 {
+        Vec3::up()
+    } else {
+        Vec3::new(1.0, 0.0, 0.0)
+    };
+    dir.cross(candidate).normalize()
+}
+
+/// Complete pipeline: genotype → phenotype → L-system → turtle → mesh data.
+pub fn generate_plant_mesh(
+    genotype: &crate::genetics::PlantGenotype,
+    rng: &mut impl rand::Rng,
+) -> PlantMeshData {
+    let phenotype = crate::phenotype::express_phenotype(genotype);
+    let lsystem = crate::lsystem::LSystem::from_phenotype(&phenotype);
+    let symbols = lsystem.derive(phenotype.axiom_complexity, rng);
+
+    let mut turtle = crate::turtle::TurtleInterpreter::new();
+    let mut mesh_data = turtle.interpret(&symbols, &phenotype);
+    mesh_data.build_stem_mesh(6);
+    mesh_data
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::genetics::PlantGenotype;
+    use rand::SeedableRng;
+
+    #[test]
+    fn test_build_stem_mesh_single_segment() {
+        let mut mesh = PlantMeshData::new();
+        mesh.stem_segments.push(StemSegment {
+            start: Vec3::zero(),
+            end: Vec3::new(0.0, 1.0, 0.0),
+            start_width: 0.1,
+            end_width: 0.08,
+        });
+
+        mesh.build_stem_mesh(6);
+
+        // 6 segments around, 2 rings = 12 vertices
+        assert_eq!(mesh.vertex_count(), 12);
+        // 6 quads * 2 triangles = 12 triangles
+        assert_eq!(mesh.triangle_count(), 12);
+    }
+
+    #[test]
+    fn test_build_stem_mesh_multiple_segments() {
+        let mut mesh = PlantMeshData::new();
+        for i in 0..3 {
+            mesh.stem_segments.push(StemSegment {
+                start: Vec3::new(0.0, i as f32, 0.0),
+                end: Vec3::new(0.0, (i + 1) as f32, 0.0),
+                start_width: 0.1,
+                end_width: 0.08,
+            });
+        }
+
+        mesh.build_stem_mesh(4);
+
+        // 3 segments * 4 around * 2 rings = 24 vertices
+        assert_eq!(mesh.vertex_count(), 24);
+        // 3 segments * 4 quads * 2 triangles = 24 triangles
+        assert_eq!(mesh.triangle_count(), 24);
+    }
+
+    #[test]
+    fn test_end_to_end_pipeline() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let genotype = PlantGenotype::random_wild(&mut rng);
+
+        let mesh = generate_plant_mesh(&genotype, &mut rng);
+
+        assert!(!mesh.stem_segments.is_empty());
+        assert!(mesh.vertex_count() > 0);
+        assert!(mesh.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_different_genotypes_different_meshes() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let g1 = PlantGenotype::random_wild(&mut rng);
+        let g2 = PlantGenotype::random_wild(&mut rng);
+
+        let mut rng1 = rand::rngs::StdRng::seed_from_u64(100);
+        let mut rng2 = rand::rngs::StdRng::seed_from_u64(100);
+
+        let m1 = generate_plant_mesh(&g1, &mut rng1);
+        let m2 = generate_plant_mesh(&g2, &mut rng2);
+
+        // Different genotypes should produce different meshes
+        assert_ne!(m1.stem_segments.len(), m2.stem_segments.len());
+    }
+
+    #[test]
+    fn test_instance_count() {
+        let mut mesh = PlantMeshData::new();
+        mesh.leaf_instances.push(MeshInstance {
+            position: Vec3::zero(),
+            direction: Vec3::up(),
+            up: Vec3::forward(),
+            template_index: 0,
+            scale: 1.0,
+            color: PlantColor::from_hsv(120.0, 0.8, 0.7),
+        });
+        mesh.flower_instances.push(MeshInstance {
+            position: Vec3::zero(),
+            direction: Vec3::up(),
+            up: Vec3::forward(),
+            template_index: 0,
+            scale: 1.0,
+            color: PlantColor::from_hsv(300.0, 0.8, 0.9),
+        });
+
+        assert_eq!(mesh.instance_count(), 2);
+    }
+
+    #[test]
+    fn test_find_perpendicular() {
+        let perp = find_perpendicular(Vec3::up());
+        // Should be perpendicular (dot product ≈ 0)
+        let dot = perp.x * 0.0 + perp.y * 1.0 + perp.z * 0.0;
+        assert!(dot.abs() < 0.001);
+
+        let perp2 = find_perpendicular(Vec3::new(1.0, 0.0, 0.0));
+        let dot2 = perp2.x * 1.0 + perp2.y * 0.0 + perp2.z * 0.0;
+        assert!(dot2.abs() < 0.001);
+    }
+
+    #[test]
+    fn test_mesh_data_serde_roundtrip() {
+        let mut mesh = PlantMeshData::new();
+        mesh.stem_segments.push(StemSegment {
+            start: Vec3::zero(),
+            end: Vec3::up(),
+            start_width: 0.1,
+            end_width: 0.08,
+        });
+        mesh.build_stem_mesh(4);
+
+        let json = serde_json::to_string(&mesh).unwrap();
+        let deserialized: PlantMeshData = serde_json::from_str(&json).unwrap();
+        assert_eq!(mesh, deserialized);
+    }
+}

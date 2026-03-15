@@ -174,6 +174,11 @@ name = "apothecarys-botany"
 version = "0.1.0"
 dependencies = [
  "apothecarys-core",
+ "rand 0.8.5",
+ "ron",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -219,7 +224,12 @@ dependencies = [
 name = "apothecarys-garden"
 version = "0.1.0"
 dependencies = [
+ "apothecarys-botany",
  "apothecarys-core",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
