@@ -1,0 +1,12 @@
+[package]
+name = "apothecarys-game"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+apothecarys-core = { path = "../core" }
+fyrox = { workspace = true }
+
+[[bin]]
+name = "game"
+path = "src/main.rs"
