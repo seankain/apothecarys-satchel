@@ -114,28 +114,31 @@ pub struct DerivedStats {
     pub damage_dice: DamageDice,
 }
 
+/// Parameters for calculating derived stats from attributes and class/equipment data.
+#[derive(Debug, Clone)]
+pub struct DerivedStatsParams {
+    pub level: u32,
+    pub class_hp_bonus: i32,
+    pub class_init_bonus: i32,
+    pub equipment_ac: i32,
+    pub proficiency: i32,
+    pub use_dex_for_attack: bool,
+    pub damage_dice: DamageDice,
+}
+
 impl DerivedStats {
-    /// Calculate derived stats from attributes, level, and class bonuses.
-    pub fn calculate(
-        attributes: &Attributes,
-        level: u32,
-        class_hp_bonus: i32,
-        class_init_bonus: i32,
-        equipment_ac: i32,
-        proficiency: i32,
-        use_dex_for_attack: bool,
-        damage_dice: DamageDice,
-    ) -> Self {
+    /// Calculate derived stats from attributes and class/equipment parameters.
+    pub fn calculate(attributes: &Attributes, params: &DerivedStatsParams) -> Self {
         let con_mod = attributes.constitution_mod();
         let dex_mod = attributes.dexterity_mod();
         let str_mod = attributes.strength_mod();
 
-        let max_hp = 10 + con_mod * level as i32 + class_hp_bonus;
-        let armor_class = 10 + dex_mod + equipment_ac;
-        let initiative_bonus = dex_mod + class_init_bonus;
+        let max_hp = 10 + con_mod * params.level as i32 + params.class_hp_bonus;
+        let armor_class = 10 + dex_mod + params.equipment_ac;
+        let initiative_bonus = dex_mod + params.class_init_bonus;
         let movement_speed = 5.0 + dex_mod as f32 * 0.5;
-        let attack_mod = if use_dex_for_attack { dex_mod } else { str_mod };
-        let attack_bonus = attack_mod + proficiency;
+        let attack_mod = if params.use_dex_for_attack { dex_mod } else { str_mod };
+        let attack_bonus = attack_mod + params.proficiency;
 
         Self {
             max_hp,
@@ -144,7 +147,7 @@ impl DerivedStats {
             initiative_bonus,
             movement_speed,
             attack_bonus,
-            damage_dice,
+            damage_dice: params.damage_dice.clone(),
         }
     }
 }
@@ -327,6 +330,122 @@ impl StatusEffectTracker {
             .iter()
             .any(|e| matches!(e.effect, StatusEffect::Blinded))
     }
+
+    /// Check if hasted (gets an extra action).
+    pub fn is_hasted(&self) -> bool {
+        self.effects
+            .iter()
+            .any(|e| matches!(e.effect, StatusEffect::Haste))
+    }
+
+    /// Check if resistant to a specific damage type.
+    pub fn has_resistance(&self, damage_type: DamageType) -> bool {
+        self.effects.iter().any(|e| {
+            matches!(&e.effect, StatusEffect::Resistance { damage_type: dt } if *dt == damage_type)
+        })
+    }
+
+    /// Get the total stat boost for a specific attribute from active effects.
+    pub fn stat_boost(&self, attribute: AttributeType) -> i32 {
+        self.effects
+            .iter()
+            .filter_map(|e| match &e.effect {
+                StatusEffect::StatBoost { attribute: attr, amount } if *attr == attribute => {
+                    Some(*amount)
+                }
+                _ => None,
+            })
+            .sum()
+    }
+}
+
+/// A combatant in the game — ties together attributes, derived stats, and status effects.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Combatant {
+    pub name: String,
+    pub level: u32,
+    pub attributes: Attributes,
+    pub base_stats: DerivedStats,
+    pub status_effects: StatusEffectTracker,
+}
+
+impl Combatant {
+    pub fn new(name: impl Into<String>, level: u32, attributes: Attributes, base_stats: DerivedStats) -> Self {
+        Self {
+            name: name.into(),
+            level,
+            attributes,
+            base_stats,
+            status_effects: StatusEffectTracker::new(),
+        }
+    }
+
+    /// Get effective attack bonus including status effect modifiers.
+    pub fn effective_attack_bonus(&self) -> i32 {
+        self.base_stats.attack_bonus + self.status_effects.attack_modifier()
+    }
+
+    /// Get effective armor class including status effect modifiers.
+    pub fn effective_armor_class(&self) -> i32 {
+        self.base_stats.armor_class + self.status_effects.defense_modifier()
+    }
+
+    /// Get effective movement speed (halved if slowed).
+    pub fn effective_movement_speed(&self) -> f32 {
+        if self.status_effects.is_slowed() {
+            self.base_stats.movement_speed * 0.5
+        } else {
+            self.base_stats.movement_speed
+        }
+    }
+
+    /// Get an effective attribute value including stat boosts.
+    pub fn effective_attribute(&self, attr: AttributeType) -> i32 {
+        let base = match attr {
+            AttributeType::Strength => self.attributes.strength,
+            AttributeType::Dexterity => self.attributes.dexterity,
+            AttributeType::Constitution => self.attributes.constitution,
+            AttributeType::Intelligence => self.attributes.intelligence,
+            AttributeType::Wisdom => self.attributes.wisdom,
+            AttributeType::Charisma => self.attributes.charisma,
+        };
+        base + self.status_effects.stat_boost(attr)
+    }
+
+    /// Apply damage to this combatant. Returns actual damage dealt.
+    pub fn take_damage(&mut self, amount: i32, damage_type: DamageType) -> i32 {
+        let actual = if self.status_effects.has_resistance(damage_type) {
+            amount / 2
+        } else {
+            amount
+        };
+        self.base_stats.current_hp -= actual;
+        actual
+    }
+
+    /// Heal this combatant. Cannot exceed max HP.
+    pub fn heal(&mut self, amount: i32) {
+        self.base_stats.current_hp = (self.base_stats.current_hp + amount).min(self.base_stats.max_hp);
+    }
+
+    /// Returns true if HP <= 0.
+    pub fn is_dead(&self) -> bool {
+        self.base_stats.current_hp <= 0
+    }
+
+    /// Tick status effects, applying per-turn results (regen/poison).
+    pub fn tick_effects(&mut self) -> Vec<TickResult> {
+        let results = self.status_effects.tick();
+        for result in &results {
+            match result {
+                TickResult::Heal(amount) => self.heal(*amount),
+                TickResult::Damage(amount) => {
+                    self.base_stats.current_hp -= amount;
+                }
+            }
+        }
+        results
+    }
 }
 
 /// Result from ticking status effects each turn.
@@ -365,13 +484,15 @@ mod tests {
 
         let stats = DerivedStats::calculate(
             &attrs,
-            3,                         // level
-            2,                         // class_hp_bonus (e.g. warrior)
-            0,                         // class_init_bonus
-            3,                         // equipment_ac
-            2,                         // proficiency
-            false,                     // use STR for attack
-            DamageDice::new(1, 8, 3),  // 1d8+3
+            &DerivedStatsParams {
+                level: 3,
+                class_hp_bonus: 2,
+                class_init_bonus: 0,
+                equipment_ac: 3,
+                proficiency: 2,
+                use_dex_for_attack: false,
+                damage_dice: DamageDice::new(1, 8, 3),
+            },
         );
 
         // max_hp = 10 + 2 * 3 + 2 = 18
@@ -486,6 +607,151 @@ mod tests {
         let json = serde_json::to_string(&stats).unwrap();
         let deserialized: DerivedStats = serde_json::from_str(&json).unwrap();
         assert_eq!(stats, deserialized);
+    }
+
+    #[test]
+    fn test_has_resistance() {
+        let mut tracker = StatusEffectTracker::new();
+        assert!(!tracker.has_resistance(DamageType::Fire));
+
+        tracker.apply(StatusEffect::Resistance { damage_type: DamageType::Fire }, 3);
+        assert!(tracker.has_resistance(DamageType::Fire));
+        assert!(!tracker.has_resistance(DamageType::Ice));
+    }
+
+    #[test]
+    fn test_is_hasted() {
+        let mut tracker = StatusEffectTracker::new();
+        assert!(!tracker.is_hasted());
+        tracker.apply(StatusEffect::Haste, 2);
+        assert!(tracker.is_hasted());
+    }
+
+    #[test]
+    fn test_stat_boost() {
+        let mut tracker = StatusEffectTracker::new();
+        tracker.apply(
+            StatusEffect::StatBoost { attribute: AttributeType::Strength, amount: 4 },
+            3,
+        );
+        assert_eq!(tracker.stat_boost(AttributeType::Strength), 4);
+        assert_eq!(tracker.stat_boost(AttributeType::Dexterity), 0);
+    }
+
+    #[test]
+    fn test_combatant_effective_stats() {
+        let attrs = Attributes {
+            strength: 16,
+            dexterity: 14,
+            constitution: 14,
+            intelligence: 10,
+            wisdom: 12,
+            charisma: 8,
+        };
+        let stats = DerivedStats::calculate(&attrs, &DerivedStatsParams {
+            level: 3, class_hp_bonus: 2, class_init_bonus: 0, equipment_ac: 3,
+            proficiency: 2, use_dex_for_attack: false, damage_dice: DamageDice::new(1, 8, 3),
+        });
+        let mut combatant = Combatant::new("Test Fighter", 3, attrs, stats);
+
+        assert_eq!(combatant.effective_attack_bonus(), 5);
+        assert_eq!(combatant.effective_armor_class(), 15);
+        assert!((combatant.effective_movement_speed() - 6.0).abs() < f32::EPSILON);
+
+        combatant.status_effects.apply(StatusEffect::AttackUp { amount: 2 }, 3);
+        combatant.status_effects.apply(StatusEffect::DefenseUp { amount: 1 }, 3);
+        combatant.status_effects.apply(StatusEffect::Slowed, 2);
+
+        assert_eq!(combatant.effective_attack_bonus(), 7);
+        assert_eq!(combatant.effective_armor_class(), 16);
+        assert!((combatant.effective_movement_speed() - 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_combatant_damage_and_healing() {
+        let attrs = Attributes::default();
+        let stats = DerivedStats { max_hp: 20, current_hp: 20, ..Default::default() };
+        let mut combatant = Combatant::new("Test", 1, attrs, stats);
+
+        let dealt = combatant.take_damage(8, DamageType::Physical);
+        assert_eq!(dealt, 8);
+        assert_eq!(combatant.base_stats.current_hp, 12);
+
+        combatant.heal(5);
+        assert_eq!(combatant.base_stats.current_hp, 17);
+
+        // Healing cannot exceed max
+        combatant.heal(100);
+        assert_eq!(combatant.base_stats.current_hp, 20);
+    }
+
+    #[test]
+    fn test_combatant_resistance_halves_damage() {
+        let attrs = Attributes::default();
+        let stats = DerivedStats { max_hp: 20, current_hp: 20, ..Default::default() };
+        let mut combatant = Combatant::new("Test", 1, attrs, stats);
+        combatant.status_effects.apply(StatusEffect::Resistance { damage_type: DamageType::Fire }, 5);
+
+        let dealt = combatant.take_damage(10, DamageType::Fire);
+        assert_eq!(dealt, 5);
+        assert_eq!(combatant.base_stats.current_hp, 15);
+
+        // Non-resisted damage is full
+        let dealt = combatant.take_damage(10, DamageType::Ice);
+        assert_eq!(dealt, 10);
+        assert_eq!(combatant.base_stats.current_hp, 5);
+    }
+
+    #[test]
+    fn test_combatant_tick_effects() {
+        let attrs = Attributes::default();
+        let stats = DerivedStats { max_hp: 30, current_hp: 20, ..Default::default() };
+        let mut combatant = Combatant::new("Test", 1, attrs, stats);
+
+        combatant.status_effects.apply(StatusEffect::Regeneration { hp_per_turn: 3 }, 2);
+        combatant.status_effects.apply(StatusEffect::Poisoned { damage_per_turn: 2 }, 1);
+
+        let results = combatant.tick_effects();
+        assert_eq!(results.len(), 2);
+        // +3 heal, -2 poison = net +1
+        assert_eq!(combatant.base_stats.current_hp, 21);
+    }
+
+    #[test]
+    fn test_combatant_is_dead() {
+        let attrs = Attributes::default();
+        let stats = DerivedStats { max_hp: 10, current_hp: 5, ..Default::default() };
+        let mut combatant = Combatant::new("Test", 1, attrs, stats);
+
+        assert!(!combatant.is_dead());
+        combatant.take_damage(5, DamageType::Physical);
+        assert!(combatant.is_dead());
+    }
+
+    #[test]
+    fn test_combatant_effective_attribute() {
+        let attrs = Attributes { strength: 14, ..Default::default() };
+        let stats = DerivedStats::default();
+        let mut combatant = Combatant::new("Test", 1, attrs, stats);
+
+        assert_eq!(combatant.effective_attribute(AttributeType::Strength), 14);
+        combatant.status_effects.apply(
+            StatusEffect::StatBoost { attribute: AttributeType::Strength, amount: 4 },
+            3,
+        );
+        assert_eq!(combatant.effective_attribute(AttributeType::Strength), 18);
+    }
+
+    #[test]
+    fn test_combatant_serde_roundtrip() {
+        let attrs = Attributes { strength: 16, ..Default::default() };
+        let stats = DerivedStats { max_hp: 20, current_hp: 15, ..Default::default() };
+        let mut combatant = Combatant::new("Warrior", 3, attrs, stats);
+        combatant.status_effects.apply(StatusEffect::AttackUp { amount: 2 }, 3);
+
+        let json = serde_json::to_string(&combatant).unwrap();
+        let deserialized: Combatant = serde_json::from_str(&json).unwrap();
+        assert_eq!(combatant, deserialized);
     }
 
     #[test]

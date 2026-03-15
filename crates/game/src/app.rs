@@ -10,19 +10,14 @@ use fyrox::{
 };
 
 /// High-level game states corresponding to distinct gameplay modes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Visit, Reflect)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Visit, Reflect)]
 pub enum GameState {
+    #[default]
     Menu,
     Hub,
     Dungeon,
     Combat,
     Garden,
-}
-
-impl Default for GameState {
-    fn default() -> Self {
-        Self::Menu
-    }
 }
 
 /// The main Fyrox game plugin for The Apothecary's Satchel.
