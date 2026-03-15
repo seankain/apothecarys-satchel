@@ -5,3 +5,9 @@ edition = "2021"
 
 [dependencies]
 apothecarys-core = { path = "../core" }
+glam = { version = "0.29", features = ["serde"] }
+pathfinding = "4"
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
