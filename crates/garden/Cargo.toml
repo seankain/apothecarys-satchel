@@ -5,3 +5,8 @@ edition = "2021"
 
 [dependencies]
 apothecarys-core = { path = "../core" }
+apothecarys-botany = { path = "../botany" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+rand = { workspace = true }
