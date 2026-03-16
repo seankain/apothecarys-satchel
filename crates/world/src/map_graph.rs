@@ -109,6 +109,11 @@ impl WorldGraph {
         self.locations.keys()
     }
 
+    /// Get all location definitions.
+    pub fn all_locations(&self) -> impl Iterator<Item = &LocationDef> {
+        self.locations.values()
+    }
+
     /// Get the total number of locations.
     pub fn location_count(&self) -> usize {
         self.locations.len()
