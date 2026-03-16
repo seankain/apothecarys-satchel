@@ -5,3 +5,20 @@ edition = "2021"
 
 [dependencies]
 apothecarys-core = { path = "../core" }
+apothecarys-inventory = { path = "../inventory" }
+apothecarys-party = { path = "../party" }
+apothecarys-combat = { path = "../combat" }
+apothecarys-garden = { path = "../garden" }
+apothecarys-world = { path = "../world" }
+apothecarys-dialogue = { path = "../dialogue" }
+apothecarys-botany = { path = "../botany" }
+serde = { workspace = true }
+uuid = { workspace = true }
+rmp-serde = "1"
+crc32fast = "1"
+thiserror = "1"
+
+[dev-dependencies]
+serde_json = { workspace = true }
+rand = { workspace = true }
+uuid = { workspace = true }
