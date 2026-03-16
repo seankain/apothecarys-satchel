@@ -23,3 +23,15 @@ uuid = { version = "1", features = ["v4", "serde"] }
 ron = "0.8"
 fyrox = "0.36"
 rand = "0.8"
+
+# To build without ALSA (no sound) on platforms where libasound2-dev is
+# unavailable, uncomment the [patch] section below.  Alternatively, pass it on
+# the command line without editing this file:
+#
+#   cargo build --config 'patch.crates-io.alsa-sys.path="crates/alsa-sys-stub"'
+#
+# The stub makes snd_pcm_open return an error so Fyrox gracefully skips audio
+# initialisation.  Everything else (rendering, input, physics) works normally.
+
+[patch.crates-io]
+alsa-sys = { path = "crates/alsa-sys-stub" }
