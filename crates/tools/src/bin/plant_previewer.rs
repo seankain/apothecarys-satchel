@@ -21,7 +21,6 @@ use fyrox::{
             surface::{SurfaceBuilder, SurfaceData, SurfaceResource},
             MeshBuilder, RenderPath,
         },
-        node::Node,
         transform::TransformBuilder,
         Scene,
     },
@@ -150,8 +149,20 @@ impl PlantPreviewerPlugin {
             indices.push(idx);
         }
 
+        let vertex_data = {
+                    let mut data = Vec::new();
+                    for i in 0..positions.len() {
+                        data.extend_from_slice(&positions[i].x.to_le_bytes());
+                        data.extend_from_slice(&positions[i].y.to_le_bytes());
+                        data.extend_from_slice(&positions[i].z.to_le_bytes());
+                        data.extend_from_slice(&normals[i].x.to_le_bytes());
+                        data.extend_from_slice(&normals[i].y.to_le_bytes());
+                        data.extend_from_slice(&normals[i].z.to_le_bytes());
+                    }
+                    data
+                };
         let surface_data = SurfaceData::new(
-            fyrox::scene::mesh::buffer::VertexBuffer::new_with_data(
+            fyrox::scene::mesh::buffer::VertexBuffer::new_with_layout(
                 &[
                     fyrox::scene::mesh::buffer::VertexAttributeDescriptor {
                         usage: fyrox::scene::mesh::buffer::VertexAttributeUsage::Position,
@@ -170,38 +181,23 @@ impl PlantPreviewerPlugin {
                         normalized: false,
                     },
                 ],
-                {
-                    let mut data = Vec::new();
-                    for i in 0..positions.len() {
-                        data.extend_from_slice(&positions[i].x.to_le_bytes());
-                        data.extend_from_slice(&positions[i].y.to_le_bytes());
-                        data.extend_from_slice(&positions[i].z.to_le_bytes());
-                        data.extend_from_slice(&normals[i].x.to_le_bytes());
-                        data.extend_from_slice(&normals[i].y.to_le_bytes());
-                        data.extend_from_slice(&normals[i].z.to_le_bytes());
-                    }
-                    data
-                },
                 positions.len(),
+                fyrox::scene::mesh::buffer::BytesStorage::new(vertex_data),
             )
             .unwrap(),
             fyrox::scene::mesh::buffer::TriangleBuffer::new(
                 indices
                     .chunks(3)
-                    .map(|tri| fyrox::scene::mesh::buffer::TriangleDefinition([tri[0], tri[1], tri[2]]))
+                    .map(|tri| fyrox::core::math::TriangleDefinition([tri[0], tri[1], tri[2]]))
                     .collect(),
             ),
-            true,
         );
-
-        let brown = Color::opaque(101, 67, 33);
 
         MeshBuilder::new(BaseBuilder::new())
             .with_surfaces(vec![SurfaceBuilder::new(SurfaceResource::new_ok(
                 ResourceKind::Embedded,
                 surface_data,
             ))
-            .with_color(brown)
             .build()])
             .with_render_path(RenderPath::Forward)
             .build(&mut scene.graph);
@@ -261,7 +257,7 @@ impl PlantPreviewerPlugin {
         scene: &mut Scene,
         position: Vector3<f32>,
         half_size: f32,
-        color: Color,
+        _color: Color,
     ) {
         let surface_data = SurfaceData::make_cube(fyrox::core::algebra::Matrix4::new_scaling(
             half_size,
@@ -278,7 +274,6 @@ impl PlantPreviewerPlugin {
             ResourceKind::Embedded,
             surface_data,
         ))
-        .with_color(color)
         .build()])
         .with_render_path(RenderPath::Forward)
         .build(&mut scene.graph);
@@ -289,7 +284,7 @@ impl PlantPreviewerPlugin {
             &Vector3::new(5.0, 0.02, 5.0),
         ));
 
-        let ground_color = Color::opaque(80, 120, 60);
+        let _ground_color = Color::opaque(80, 120, 60);
 
         MeshBuilder::new(
             BaseBuilder::new().with_local_transform(
@@ -302,7 +297,6 @@ impl PlantPreviewerPlugin {
             ResourceKind::Embedded,
             surface_data,
         ))
-        .with_color(ground_color)
         .build()])
         .with_render_path(RenderPath::Forward)
         .build(&mut scene.graph);
