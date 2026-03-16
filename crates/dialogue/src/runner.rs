@@ -253,6 +253,16 @@ impl DialogueRunner {
         &self.state
     }
 
+    /// Get the titles of all loaded nodes.
+    pub fn node_titles(&self) -> Vec<&str> {
+        self.nodes.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Get all current variable names and values.
+    pub fn variables(&self) -> &HashMap<String, YarnValue> {
+        &self.variables
+    }
+
     /// Whether dialogue is currently active (not idle and not finished).
     pub fn is_active(&self) -> bool {
         !matches!(self.state, DialogueState::Idle | DialogueState::Finished)

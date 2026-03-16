@@ -313,8 +313,12 @@ version = "0.1.0"
 dependencies = [
  "apothecarys-botany",
  "apothecarys-core",
+ "apothecarys-dialogue",
+ "apothecarys-world",
  "fyrox",
  "rand 0.8.5",
+ "ron",
+ "serde",
 ]
 
 [[package]]

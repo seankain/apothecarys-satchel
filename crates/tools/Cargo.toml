@@ -6,7 +6,11 @@ edition = "2021"
 [dependencies]
 apothecarys-core = { path = "../core" }
 apothecarys-botany = { path = "../botany" }
+apothecarys-world = { path = "../world" }
+apothecarys-dialogue = { path = "../dialogue" }
 rand = { workspace = true }
+ron = { workspace = true }
+serde = { workspace = true }
 fyrox = { workspace = true, optional = true }
 
 [features]
@@ -16,4 +20,24 @@ viewer = ["fyrox"]
 [[bin]]
 name = "plant_previewer"
 path = "src/bin/plant_previewer.rs"
+required-features = ["viewer"]
+
+[[bin]]
+name = "map_editor"
+path = "src/bin/map_editor.rs"
+required-features = ["viewer"]
+
+[[bin]]
+name = "connection_editor"
+path = "src/bin/connection_editor.rs"
+required-features = ["viewer"]
+
+[[bin]]
+name = "animation_viewer"
+path = "src/bin/animation_viewer.rs"
+required-features = ["viewer"]
+
+[[bin]]
+name = "dialogue_tester"
+path = "src/bin/dialogue_tester.rs"
 required-features = ["viewer"]
