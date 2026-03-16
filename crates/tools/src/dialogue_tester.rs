@@ -365,4 +365,90 @@ NPC: Welcome to my shop!
         assert!(state.command_log.is_empty());
         assert!(state.line_history.is_empty());
     }
+
+    #[test]
+    fn test_select_invalid_choice() {
+        let mut state = DialogueTesterState::new();
+        state.load_yarn(TEST_YARN).unwrap();
+        state.start_node("Greeting");
+        state.advance(); // line 1
+        state.advance(); // line 2
+        state.advance(); // choices
+
+        assert!(!state.select_choice(99));
+    }
+
+    #[test]
+    fn test_debug_impl() {
+        let state = DialogueTesterState::new();
+        let debug_str = format!("{state:?}");
+        assert!(debug_str.contains("DialogueTesterState"));
+        assert!(debug_str.contains("command_log"));
+    }
+
+    #[test]
+    fn test_default_trait() {
+        let state = DialogueTesterState::default();
+        assert!(!state.is_active());
+        assert!(state.command_log.is_empty());
+        assert!(state.line_history.is_empty());
+        assert!(state.loaded_file.is_none());
+    }
+
+    #[test]
+    fn test_load_file_nonexistent() {
+        let mut state = DialogueTesterState::new();
+        let result = state.load_yarn_file("/tmp/nonexistent_apothecarys_test.yarn");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_format_value_integers() {
+        assert_eq!(DialogueTesterState::format_value(&YarnValue::Number(0.0)), "0");
+        assert_eq!(DialogueTesterState::format_value(&YarnValue::Number(1.0)), "1");
+        assert_eq!(DialogueTesterState::format_value(&YarnValue::Number(-5.0)), "-5");
+    }
+
+    #[test]
+    fn test_format_value_booleans() {
+        assert_eq!(DialogueTesterState::format_value(&YarnValue::Bool(false)), "false");
+    }
+
+    #[test]
+    fn test_multiple_nodes_navigation() {
+        let mut state = DialogueTesterState::new();
+        state.load_yarn(TEST_YARN).unwrap();
+
+        // Start Greeting node
+        state.start_node("Greeting");
+        assert!(state.is_active());
+
+        // Start a different node
+        state.start_node("Shop");
+        assert!(state.is_active());
+
+        // Advance through shop
+        let s = state.advance();
+        assert!(matches!(s, DialogueState::ShowingLine { .. }));
+    }
+
+    #[test]
+    fn test_line_history_speaker_none() {
+        let yarn = r#"title: Test
+---
+This is a narration line without a speaker.
+===
+"#;
+        let mut state = DialogueTesterState::new();
+        state.load_yarn(yarn).unwrap();
+        state.start_node("Test");
+        state.advance();
+
+        assert_eq!(state.line_history.len(), 1);
+        assert!(state.line_history[0].speaker.is_none());
+        assert_eq!(
+            state.line_history[0].text,
+            "This is a narration line without a speaker."
+        );
+    }
 }

@@ -440,4 +440,101 @@ mod tests {
         state.selected_clip = Some(1);
         assert_eq!(state.current_clip_duration(), Some(1.0));
     }
+
+    #[test]
+    fn test_update_no_clip_selected() {
+        let mut state = AnimationViewerState::new();
+        state.set_model("char.glb".to_string(), sample_clips());
+        state.selected_clip = None;
+        state.playback_state = PlaybackState::Playing;
+
+        assert!(!state.update(1.0));
+    }
+
+    #[test]
+    fn test_set_time_no_clip() {
+        let mut state = AnimationViewerState::new();
+        state.set_time(1.0); // Should be no-op
+        assert_eq!(state.current_time, 0.0);
+    }
+
+    #[test]
+    fn test_zero_duration_clip() {
+        let mut state = AnimationViewerState::new();
+        state.set_model(
+            "char.glb".to_string(),
+            vec![AnimationClipInfo {
+                name: "zero".to_string(),
+                duration: 0.0,
+            }],
+        );
+        state.select_and_play(0);
+        assert!(!state.update(1.0)); // zero duration should not advance
+    }
+
+    #[test]
+    fn test_progress_zero_duration() {
+        let mut state = AnimationViewerState::new();
+        state.set_model(
+            "char.glb".to_string(),
+            vec![AnimationClipInfo {
+                name: "zero".to_string(),
+                duration: 0.0,
+            }],
+        );
+        state.selected_clip = Some(0);
+        assert_eq!(state.progress(), 0.0);
+    }
+
+    #[test]
+    fn test_set_model_resets_state() {
+        let mut state = AnimationViewerState::new();
+        state.set_model("char.glb".to_string(), sample_clips());
+        state.select_and_play(2);
+        state.update(0.3);
+
+        // Reload model - should reset
+        state.set_model("new_char.glb".to_string(), sample_clips());
+        assert_eq!(state.current_time, 0.0);
+        assert_eq!(state.playback_state, PlaybackState::Stopped);
+        assert_eq!(state.selected_clip, Some(0));
+    }
+
+    #[test]
+    fn test_orbit_camera_calculate_position_at_zero_yaw() {
+        let camera = OrbitCameraConfig {
+            distance: 10.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            target: [0.0, 0.0, 0.0],
+            min_distance: 1.0,
+            max_distance: 50.0,
+        };
+        let pos = camera.calculate_position();
+        // At yaw=0, pitch=0: camera should be at (0, 0, distance) from target
+        assert!((pos[0]).abs() < 0.001);
+        assert!((pos[1]).abs() < 0.001);
+        assert!((pos[2] - 10.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_default_trait() {
+        let state = AnimationViewerState::default();
+        assert!(state.clips.is_empty());
+        assert_eq!(state.playback_state, PlaybackState::Stopped);
+    }
+
+    #[test]
+    fn test_multiple_play_stop_cycles() {
+        let mut state = AnimationViewerState::new();
+        state.set_model("char.glb".to_string(), sample_clips());
+
+        for _ in 0..5 {
+            state.select_and_play(0);
+            state.update(0.5);
+            state.stop();
+            assert_eq!(state.current_time, 0.0);
+            assert_eq!(state.playback_state, PlaybackState::Stopped);
+        }
+    }
 }

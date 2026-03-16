@@ -518,4 +518,239 @@ mod tests {
         let assets = scan_assets("/tmp/nonexistent_apothecarys_test_dir");
         assert!(assets.is_empty());
     }
+
+    #[test]
+    fn test_apply_rotate_action() {
+        let mut data = PlacementData::new("test");
+        data.add_object("box.glb".to_string(), [0.0, 0.0, 0.0]);
+
+        let rotate = EditorAction::RotateObject {
+            id: 1,
+            old_rotation: [0.0, 0.0, 0.0],
+            new_rotation: [0.0, 1.57, 0.0],
+        };
+        apply_action(&mut data, &rotate);
+        assert_eq!(data.get_object(1).unwrap().rotation, [0.0, 1.57, 0.0]);
+
+        reverse_action(&mut data, &rotate);
+        assert_eq!(data.get_object(1).unwrap().rotation, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_apply_scale_action() {
+        let mut data = PlacementData::new("test");
+        data.add_object("box.glb".to_string(), [0.0, 0.0, 0.0]);
+
+        let scale = EditorAction::ScaleObject {
+            id: 1,
+            old_scale: [1.0, 1.0, 1.0],
+            new_scale: [2.0, 3.0, 2.0],
+        };
+        apply_action(&mut data, &scale);
+        assert_eq!(data.get_object(1).unwrap().scale, [2.0, 3.0, 2.0]);
+
+        reverse_action(&mut data, &scale);
+        assert_eq!(data.get_object(1).unwrap().scale, [1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn test_next_id_increments() {
+        let mut data = PlacementData::new("test");
+        let id1 = data.add_object("a.glb".to_string(), [0.0, 0.0, 0.0]);
+        let id2 = data.add_object("b.glb".to_string(), [1.0, 0.0, 0.0]);
+        let id3 = data.add_object("c.glb".to_string(), [2.0, 0.0, 0.0]);
+
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_eq!(id3, 3);
+        assert_eq!(data.next_id, 4);
+
+        // Removing objects doesn't reset next_id
+        data.remove_object(id2);
+        let id4 = data.add_object("d.glb".to_string(), [3.0, 0.0, 0.0]);
+        assert_eq!(id4, 4);
+    }
+
+    #[test]
+    fn test_add_action_updates_next_id() {
+        let mut data = PlacementData::new("test");
+
+        let add = EditorAction::AddObject {
+            object: PlacedObject {
+                id: 10,
+                asset_path: "test.glb".to_string(),
+                position: [0.0, 0.0, 0.0],
+                rotation: [0.0, 0.0, 0.0],
+                scale: [1.0, 1.0, 1.0],
+                components: Vec::new(),
+            },
+        };
+        apply_action(&mut data, &add);
+        assert_eq!(data.next_id, 11);
+    }
+
+    #[test]
+    fn test_snap_to_grid_negative_coords() {
+        assert_eq!(snap_to_grid([-0.3, -0.7, -1.2], 0.5), [-0.5, -0.5, -1.0]);
+        assert_eq!(snap_to_grid([-2.0, 0.0, -3.0], 1.0), [-2.0, 0.0, -3.0]);
+    }
+
+    #[test]
+    fn test_snap_to_grid_small_grid() {
+        assert_eq!(snap_to_grid([0.12, 0.0, 0.0], 0.25), [0.0, 0.0, 0.0]);
+        assert_eq!(snap_to_grid([0.13, 0.0, 0.0], 0.25), [0.25, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_placement_save_load_file() {
+        let dir = std::env::temp_dir().join("apothecarys_test_map");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.placement.ron");
+
+        let mut data = PlacementData::new("test_loc");
+        data.add_object("tree.glb".to_string(), [5.0, 0.0, 3.0]);
+        data.add_object("rock.glb".to_string(), [10.0, 0.0, 7.0]);
+
+        data.save(&path).unwrap();
+        let loaded = PlacementData::load(&path).unwrap();
+
+        assert_eq!(data, loaded);
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_multiple_undo_redo_cycle() {
+        let mut data = PlacementData::new("test");
+        let mut stack = UndoStack::new(100);
+
+        // Perform multiple actions
+        let add1 = EditorAction::AddObject {
+            object: PlacedObject {
+                id: 1,
+                asset_path: "a.glb".to_string(),
+                position: [0.0, 0.0, 0.0],
+                rotation: [0.0, 0.0, 0.0],
+                scale: [1.0, 1.0, 1.0],
+                components: Vec::new(),
+            },
+        };
+        apply_action(&mut data, &add1);
+        stack.push(add1);
+
+        let move1 = EditorAction::MoveObject {
+            id: 1,
+            old_position: [0.0, 0.0, 0.0],
+            new_position: [5.0, 0.0, 5.0],
+        };
+        apply_action(&mut data, &move1);
+        stack.push(move1);
+
+        assert_eq!(data.get_object(1).unwrap().position, [5.0, 0.0, 5.0]);
+
+        // Undo move
+        let undone = stack.undo().unwrap();
+        reverse_action(&mut data, &undone);
+        assert_eq!(data.get_object(1).unwrap().position, [0.0, 0.0, 0.0]);
+
+        // Undo add
+        let undone = stack.undo().unwrap();
+        reverse_action(&mut data, &undone);
+        assert!(data.objects.is_empty());
+
+        // Redo add
+        let redone = stack.redo().unwrap();
+        apply_action(&mut data, &redone);
+        assert_eq!(data.objects.len(), 1);
+
+        // Redo move
+        let redone = stack.redo().unwrap();
+        apply_action(&mut data, &redone);
+        assert_eq!(data.get_object(1).unwrap().position, [5.0, 0.0, 5.0]);
+    }
+
+    #[test]
+    fn test_error_display() {
+        let io_err = MapEditorError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "not found",
+        ));
+        assert!(io_err.to_string().contains("IO error"));
+
+        let ser_err = MapEditorError::Serialize("bad data".to_string());
+        assert!(ser_err.to_string().contains("Serialize"));
+
+        let de_err = MapEditorError::Deserialize("parse fail".to_string());
+        assert!(de_err.to_string().contains("Deserialize"));
+    }
+
+    #[test]
+    fn test_remove_object_preserves_others() {
+        let mut data = PlacementData::new("test");
+        let id1 = data.add_object("a.glb".to_string(), [0.0, 0.0, 0.0]);
+        let id2 = data.add_object("b.glb".to_string(), [1.0, 0.0, 0.0]);
+        let id3 = data.add_object("c.glb".to_string(), [2.0, 0.0, 0.0]);
+
+        data.remove_object(id2);
+        assert_eq!(data.objects.len(), 2);
+        assert!(data.get_object(id1).is_some());
+        assert!(data.get_object(id2).is_none());
+        assert!(data.get_object(id3).is_some());
+    }
+
+    #[test]
+    fn test_action_on_nonexistent_object() {
+        let mut data = PlacementData::new("test");
+
+        // Applying actions to nonexistent objects should be no-ops
+        let move_action = EditorAction::MoveObject {
+            id: 999,
+            old_position: [0.0, 0.0, 0.0],
+            new_position: [5.0, 0.0, 5.0],
+        };
+        apply_action(&mut data, &move_action);
+        reverse_action(&mut data, &move_action);
+
+        let rotate_action = EditorAction::RotateObject {
+            id: 999,
+            old_rotation: [0.0, 0.0, 0.0],
+            new_rotation: [1.0, 0.0, 0.0],
+        };
+        apply_action(&mut data, &rotate_action);
+        reverse_action(&mut data, &rotate_action);
+
+        let scale_action = EditorAction::ScaleObject {
+            id: 999,
+            old_scale: [1.0, 1.0, 1.0],
+            new_scale: [2.0, 2.0, 2.0],
+        };
+        apply_action(&mut data, &scale_action);
+        reverse_action(&mut data, &scale_action);
+    }
+
+    #[test]
+    fn test_all_component_types_serialize() {
+        let mut data = PlacementData::new("test");
+        let id = data.add_object("obj.glb".to_string(), [0.0, 0.0, 0.0]);
+        let obj = data.get_object_mut(id).unwrap();
+        obj.components.push(ObjectComponent::Interactable {
+            interaction_type: "examine".to_string(),
+            display_name: "Old Chest".to_string(),
+        });
+        obj.components.push(ObjectComponent::SpawnPoint {
+            name: "player_start".to_string(),
+            spawn_type: "PlayerArrival".to_string(),
+        });
+        obj.components.push(ObjectComponent::ExitTrigger {
+            target_location: "dungeon_1".to_string(),
+            arrival_spawn: "from_hub".to_string(),
+        });
+
+        let ron_str =
+            ron::ser::to_string_pretty(&data, ron::ser::PrettyConfig::default()).unwrap();
+        let loaded: PlacementData = ron::from_str(&ron_str).unwrap();
+        assert_eq!(data, loaded);
+        assert_eq!(loaded.get_object(id).unwrap().components.len(), 3);
+    }
 }

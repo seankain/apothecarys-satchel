@@ -3,7 +3,6 @@ use std::env;
 use fyrox::{
     core::{
         algebra::{UnitQuaternion, Vector3},
-        color::Color,
         log::{Log, MessageKind},
         math::Rect,
         pool::Handle,
@@ -153,8 +152,6 @@ impl MapEditorPlugin {
                 20.0, 0.01, 20.0,
             )),
         );
-
-        let _ground_color = Color::opaque(60, 60, 70);
 
         MeshBuilder::new(
             BaseBuilder::new().with_local_transform(
@@ -324,6 +321,19 @@ impl Plugin for MapEditorPlugin {
                         format!("Added object {id} at ({}, {}, {})", pos[0], pos[1], pos[2]),
                     );
                     self.update_status(context, &format!("Added object {id}"));
+                }
+            } else if message.destination() == self.remove_button {
+                if let Some(placement) = &mut self.placement {
+                    if let Some(last) = placement.objects.last().map(|o| o.id) {
+                        placement.remove_object(last);
+                        Log::writeln(
+                            MessageKind::Information,
+                            format!("Removed object {last}"),
+                        );
+                        self.update_status(context, &format!("Removed object {last}"));
+                    } else {
+                        self.update_status(context, "No objects to remove");
+                    }
                 }
             } else if message.destination() == self.save_button {
                 if let Some(placement) = &self.placement {

@@ -267,6 +267,36 @@ impl Plugin for ConnectionEditorPlugin {
                         }
                     }
                 }
+            } else if message.destination() == self.remove_button {
+                if let Some(state) = &mut self.editor_state {
+                    if let Some(sel) = state.selected_node {
+                        if let Some(removed) = state.remove_node(sel) {
+                            let name = &removed.location.display_name;
+                            self.update_status(context, &format!("Removed {name}"));
+                        }
+                    } else if state.node_count() > 0 {
+                        let last_idx = state.node_count() - 1;
+                        if let Some(removed) = state.remove_node(last_idx) {
+                            let name = &removed.location.display_name;
+                            self.update_status(context, &format!("Removed {name}"));
+                        }
+                    } else {
+                        self.update_status(context, "No locations to remove");
+                    }
+                }
+            } else if message.destination() == self.connect_button {
+                if let Some(state) = &mut self.editor_state {
+                    let count = state.node_count();
+                    if count >= 2 {
+                        // Connect last two nodes as a demonstration
+                        let from = count - 2;
+                        let to = count - 1;
+                        state.add_connection(from, to, "exit_default", "spawn_default");
+                        self.update_status(context, "Connected last two locations");
+                    } else {
+                        self.update_status(context, "Need at least 2 locations to connect");
+                    }
+                }
             } else if message.destination() == self.add_button {
                 if let Some(state) = &mut self.editor_state {
                     let count = state.node_count();

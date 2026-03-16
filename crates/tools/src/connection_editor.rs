@@ -481,4 +481,124 @@ mod tests {
         // Selected was the removed node
         assert!(state.selected_node.is_none());
     }
+
+    #[test]
+    fn test_remove_invalid_index() {
+        let mut state = ConnectionEditorState::new();
+        assert!(state.remove_node(0).is_none());
+        assert!(state.remove_node(99).is_none());
+    }
+
+    #[test]
+    fn test_add_connection_invalid_indices() {
+        let mut state = ConnectionEditorState::new();
+        state.add_node("a", "A", LocationType::Hub, NodePosition::new(0.0, 0.0));
+
+        assert!(!state.add_connection(0, 5, "exit", "spawn"));
+        assert!(!state.add_connection(5, 0, "exit", "spawn"));
+    }
+
+    #[test]
+    fn test_remove_connection_invalid() {
+        let mut state = ConnectionEditorState::new();
+        assert!(!state.remove_connection(0, 0));
+
+        state.add_node("a", "A", LocationType::Hub, NodePosition::new(0.0, 0.0));
+        assert!(!state.remove_connection(0, 0)); // no exits
+    }
+
+    #[test]
+    fn test_add_spawn_point_invalid_index() {
+        let mut state = ConnectionEditorState::new();
+        assert!(!state.add_spawn_point(0, "test", [0.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn test_node_mut() {
+        let mut state = ConnectionEditorState::new();
+        state.add_node("a", "A", LocationType::Hub, NodePosition::new(0.0, 0.0));
+
+        let node = state.node_mut(0).unwrap();
+        node.canvas_position = NodePosition::new(300.0, 400.0);
+
+        assert_eq!(state.nodes()[0].canvas_position.x, 300.0);
+        assert_eq!(state.nodes()[0].canvas_position.y, 400.0);
+
+        assert!(state.node_mut(99).is_none());
+    }
+
+    #[test]
+    fn test_multiple_exits_from_same_node() {
+        let mut state = ConnectionEditorState::new();
+        state.add_node("a", "A", LocationType::Hub, NodePosition::new(0.0, 0.0));
+        state.add_node("b", "B", LocationType::Town, NodePosition::new(200.0, 0.0));
+        state.add_node("c", "C", LocationType::Garden, NodePosition::new(400.0, 0.0));
+
+        state.add_connection(0, 1, "exit_b", "from_a");
+        state.add_connection(0, 2, "exit_c", "from_a");
+
+        assert_eq!(state.nodes()[0].location.exits.len(), 2);
+    }
+
+    #[test]
+    fn test_save_load_file_roundtrip() {
+        let dir = std::env::temp_dir().join("apothecarys_test_conn");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test_locations.ron");
+
+        let mut state = ConnectionEditorState::new();
+        state.add_node("hub", "Hub Town", LocationType::Hub, NodePosition::new(0.0, 0.0));
+        state.add_node("garden", "Garden", LocationType::Garden, NodePosition::new(200.0, 0.0));
+        state.add_spawn_point(0, "from_garden", [0.0, 0.0, 0.0]);
+        state.add_spawn_point(1, "from_hub", [0.0, 0.0, 0.0]);
+        state.add_connection(0, 1, "exit_garden", "from_hub");
+        state.add_connection(1, 0, "exit_hub", "from_garden");
+
+        state.save_to_file(&path).unwrap();
+
+        let mut loaded = ConnectionEditorState::new();
+        loaded.load_from_file(&path).unwrap();
+
+        assert_eq!(loaded.node_count(), 2);
+        assert_eq!(loaded.nodes()[0].location.display_name, "Hub Town");
+        assert_eq!(loaded.nodes()[1].location.display_name, "Garden");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_hit_test_overlapping_nodes() {
+        let mut state = ConnectionEditorState::new();
+        state.add_node("a", "A", LocationType::Hub, NodePosition::new(100.0, 100.0));
+        state.add_node("b", "B", LocationType::Town, NodePosition::new(100.0, 100.0));
+
+        // Last added node (highest index) should be returned first (top-most)
+        let hit = state.hit_test(150.0, 120.0, 200.0, 60.0);
+        assert_eq!(hit, Some(1));
+    }
+
+    #[test]
+    fn test_load_invalid_ron() {
+        let mut state = ConnectionEditorState::new();
+        let result = state.load_from_ron("not valid ron at all");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_connection_editor_error_display() {
+        let io_err = ConnectionEditorError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "not found",
+        ));
+        assert!(io_err.to_string().contains("IO error"));
+
+        let ser_err = ConnectionEditorError::Serialize("bad data".to_string());
+        assert!(ser_err.to_string().contains("Serialize"));
+    }
+
+    #[test]
+    fn test_default_trait() {
+        let state = ConnectionEditorState::default();
+        assert_eq!(state.node_count(), 0);
+    }
 }
