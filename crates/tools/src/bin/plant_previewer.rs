@@ -12,6 +12,7 @@ use fyrox::{
     },
     engine::{executor::Executor, GraphicsContextParams},
     event_loop::EventLoop,
+    material::{Material, MaterialResource},
     plugin::{Plugin, PluginContext, PluginRegistrationContext},
     scene::{
         base::BaseBuilder,
@@ -34,6 +35,13 @@ use apothecarys_tools::plant_preview::PlantPreviewData;
 /// Convert our botany Vec3 to Fyrox Vector3.
 fn to_fyrox_vec3(v: BotanyVec3) -> Vector3<f32> {
     Vector3::new(v.x, v.y, v.z)
+}
+
+/// Create a Fyrox material with the given diffuse color.
+fn colored_material(color: Color) -> MaterialResource {
+    let mut material = Material::standard();
+    material.set_property("diffuseColor", color);
+    MaterialResource::new_ok(ResourceKind::Embedded, material)
 }
 
 /// Plugin for the plant previewer tool.
@@ -63,9 +71,10 @@ impl PlantPreviewerPlugin {
         let preview = PlantPreviewData::from_seed(self.seed);
         preview.print_summary();
 
-        // Export OBJ to file for external viewing
+        // Export OBJ and MTL files for external viewing
+        let mtl_filename = format!("plant_seed_{}.mtl", self.seed);
         let obj_path = format!("plant_seed_{}.obj", self.seed);
-        if let Err(e) = std::fs::write(&obj_path, preview.mesh.to_obj()) {
+        if let Err(e) = std::fs::write(&obj_path, preview.mesh.to_obj(&mtl_filename)) {
             Log::writeln(
                 MessageKind::Warning,
                 format!("Failed to write OBJ file: {e}"),
@@ -74,6 +83,17 @@ impl PlantPreviewerPlugin {
             Log::writeln(
                 MessageKind::Information,
                 format!("Exported OBJ to {obj_path}"),
+            );
+        }
+        if let Err(e) = std::fs::write(&mtl_filename, preview.mesh.to_mtl()) {
+            Log::writeln(
+                MessageKind::Warning,
+                format!("Failed to write MTL file: {e}"),
+            );
+        } else {
+            Log::writeln(
+                MessageKind::Information,
+                format!("Exported MTL to {mtl_filename}"),
             );
         }
 
@@ -193,11 +213,13 @@ impl PlantPreviewerPlugin {
             ),
         );
 
+        let stem_material = colored_material(Color::opaque(102, 66, 33));
         MeshBuilder::new(BaseBuilder::new())
             .with_surfaces(vec![SurfaceBuilder::new(SurfaceResource::new_ok(
                 ResourceKind::Embedded,
                 surface_data,
             ))
+            .with_material(stem_material)
             .build()])
             .with_render_path(RenderPath::Forward)
             .build(&mut scene.graph);
@@ -257,12 +279,13 @@ impl PlantPreviewerPlugin {
         scene: &mut Scene,
         position: Vector3<f32>,
         half_size: f32,
-        _color: Color,
+        color: Color,
     ) {
         let surface_data = SurfaceData::make_cube(fyrox::core::algebra::Matrix4::new_scaling(
             half_size,
         ));
 
+        let material = colored_material(color);
         MeshBuilder::new(
             BaseBuilder::new().with_local_transform(
                 TransformBuilder::new()
@@ -274,6 +297,7 @@ impl PlantPreviewerPlugin {
             ResourceKind::Embedded,
             surface_data,
         ))
+        .with_material(material)
         .build()])
         .with_render_path(RenderPath::Forward)
         .build(&mut scene.graph);
@@ -284,7 +308,7 @@ impl PlantPreviewerPlugin {
             &Vector3::new(5.0, 0.02, 5.0),
         ));
 
-        let _ground_color = Color::opaque(80, 120, 60);
+        let ground_material = colored_material(Color::opaque(80, 120, 60));
 
         MeshBuilder::new(
             BaseBuilder::new().with_local_transform(
@@ -297,6 +321,7 @@ impl PlantPreviewerPlugin {
             ResourceKind::Embedded,
             surface_data,
         ))
+        .with_material(ground_material)
         .build()])
         .with_render_path(RenderPath::Forward)
         .build(&mut scene.graph);

@@ -88,8 +88,10 @@ To generate an OBJ file without the viewer, use the library API:
 use apothecarys_tools::plant_preview::PlantPreviewData;
 
 let preview = PlantPreviewData::from_seed(42);
-let obj_string = preview.mesh.to_obj();
+let obj_string = preview.mesh.to_obj("my_plant.mtl");
+let mtl_string = preview.mesh.to_mtl();
 std::fs::write("my_plant.obj", obj_string).unwrap();
+std::fs::write("my_plant.mtl", mtl_string).unwrap();
 ```
 
 ## Library API
