@@ -140,11 +140,38 @@ mod tests {
     #[test]
     fn test_obj_export_from_preview() {
         let preview = PlantPreviewData::from_seed(42);
-        let obj = preview.mesh.to_obj();
+        let obj = preview.mesh.to_obj("plant_seed_42.mtl");
 
         assert!(obj.contains("# Plant mesh"));
+        assert!(obj.contains("mtllib plant_seed_42.mtl"));
         assert!(obj.contains("v "));
         assert!(obj.contains("f "));
         assert!(obj.contains("g stems"));
+        assert!(obj.contains("usemtl stem"));
+    }
+
+    #[test]
+    fn test_mtl_export_from_preview() {
+        let preview = PlantPreviewData::from_seed(42);
+        let mtl = preview.mesh.to_mtl();
+
+        assert!(mtl.contains("newmtl stem"));
+        assert!(mtl.contains("Kd"));
+        // Leaf material should be present since seed 42 generates leaves
+        assert!(mtl.contains("newmtl leaf"));
+    }
+
+    #[test]
+    fn test_obj_export_different_seeds() {
+        for seed in [1, 100, 999, 12345] {
+            let preview = PlantPreviewData::from_seed(seed);
+            let mtl_name = format!("plant_seed_{seed}.mtl");
+            let obj = preview.mesh.to_obj(&mtl_name);
+
+            assert!(obj.contains("# Plant mesh"));
+            assert!(obj.contains(&format!("mtllib {mtl_name}")));
+            assert!(obj.contains("g stems"));
+            assert!(obj.contains("usemtl stem"));
+        }
     }
 }
