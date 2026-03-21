@@ -15,4 +15,5 @@ pub mod dialogue_ui;
 pub mod garden_ui;
 pub mod hud;
 pub mod inventory_ui;
+pub mod main_menu;
 pub mod recruitment_ui;

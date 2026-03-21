@@ -17,6 +17,7 @@ use fyrox::{
 use std::f32::consts::FRAC_PI_4;
 
 /// Configuration for the isometric camera.
+#[derive(Debug)]
 pub struct IsoCameraConfig {
     /// Rotation around Y-axis in radians (default: 45° = π/4).
     pub yaw: f32,
@@ -50,6 +51,7 @@ impl Default for IsoCameraConfig {
 
 /// Isometric camera controller managing orthographic projection,
 /// smooth follow, zoom, and optional bounds clamping.
+#[derive(Debug)]
 pub struct IsometricCamera {
     pub camera_handle: Handle<Node>,
     pub config: IsoCameraConfig,
