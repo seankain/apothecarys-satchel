@@ -1,0 +1,13 @@
+
+[package]
+name = "apothecarys-satchel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fyrox = {workspace = true}
+apothecarys-game = { path = "../crates/game" }
+
+[features]
+default = ["fyrox/default"]
+dylib-engine = ["fyrox/dylib"]

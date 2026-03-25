@@ -1,5 +1,11 @@
 [workspace]
 members = [
+    "editor",
+    "executor",
+    "executor-wasm",
+    "executor-android",
+    "game",
+    "game-dylib",
     "crates/core",
     "crates/game",
     "crates/navigation",
@@ -22,7 +28,22 @@ serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 ron = "0.8"
 fyrox = "0.36"
+fyroxed_base = "0.36"
 rand = "0.8"
+
+# Separate build profiles for hot reloading. These profiles ensure that build
+# artifacts for hot reloading will be placed into their own folders and do not
+# interfere with standard (static) linking.
+[profile.dev-hot-reload]
+inherits = "dev"
+[profile.release-hot-reload]
+inherits = "release"
+
+# Optimize the engine in debug builds, but leave project's code non-optimized.
+# By using this technique, you can still debug your code, but the engine will be
+# fully optimized and debug builds won't be terribly slow.
+[profile.dev.package."*"]
+opt-level = 3
 
 # To build without ALSA (no sound) on platforms where libasound2-dev is
 # unavailable, uncomment the [patch] section below.  Alternatively, pass it on
