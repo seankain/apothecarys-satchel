@@ -1,0 +1,23 @@
+[package]
+name = "apothecarys-mcp-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+apothecarys-tools = { path = "../tools", default-features = false }
+apothecarys-world = { path = "../world" }
+rmcp = { version = "1", features = ["server", "transport-io"] }
+tokio = { version = "1", features = ["full"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ron = { workspace = true }
+schemars = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "fyrox-mcp-server"
+path = "src/main.rs"
