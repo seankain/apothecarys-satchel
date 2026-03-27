@@ -13,6 +13,7 @@ members = [
     "crates/garden",
     "crates/persistence",
     "crates/tools",
+    "crates/mcp-server",
 ]
 resolver = "2"
 
