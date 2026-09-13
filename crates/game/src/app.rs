@@ -127,22 +127,24 @@ impl Plugin for GamePlugin {
             ..
         } = event
         {
-            if let PhysicalKey::Code(fyrox::keyboard::KeyCode::Escape) = event.physical_key {
-                if event.state == ElementState::Pressed && !event.repeat {
-                    if self.state != GameState::Menu {
-                        self.menu_open = !self.menu_open;
-                        if let Some(ref menu) = self.main_menu {
-                            menu.set_visible(context.user_interfaces.first_mut(), self.menu_open);
-                        }
-                        Log::writeln(
-                            MessageKind::Information,
-                            format!(
-                                "Menu toggled: {}",
-                                if self.menu_open { "open" } else { "closed" }
-                            ),
-                        );
-                    }
+            if matches!(
+                event.physical_key,
+                PhysicalKey::Code(fyrox::keyboard::KeyCode::Escape)
+            ) && event.state == ElementState::Pressed
+                && !event.repeat
+                && self.state != GameState::Menu
+            {
+                self.menu_open = !self.menu_open;
+                if let Some(ref menu) = self.main_menu {
+                    menu.set_visible(context.user_interfaces.first_mut(), self.menu_open);
                 }
+                Log::writeln(
+                    MessageKind::Information,
+                    format!(
+                        "Menu toggled: {}",
+                        if self.menu_open { "open" } else { "closed" }
+                    ),
+                );
             }
         }
     }
