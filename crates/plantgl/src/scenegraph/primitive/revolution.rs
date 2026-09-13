@@ -10,7 +10,7 @@
 
 use crate::error::{Error, Result};
 use crate::math::Real;
-use crate::scenegraph::curve::Curve2DRef;
+use crate::scenegraph::curve::{Curve2DRef, ParametricCurve};
 
 use super::DEFAULT_SLICES;
 
@@ -58,7 +58,7 @@ impl Revolution {
     /// `curve_samples` is the density a parametric profile is evaluated at;
     /// an explicit profile ignores it.
     pub fn is_valid(&self, curve_samples: u32) -> Result<()> {
-        let points = self.profile.sample(curve_samples)?;
+        let points = self.profile.discretize(curve_samples)?;
         if points.len() < 2 {
             return Err(Error::degenerate(
                 "a revolution profile needs at least 2 points",
@@ -85,11 +85,12 @@ impl Revolution {
 /// Upstream's `ProfileInterpolation` fits, for each sample position along the
 /// profile, a NURBS curve of `degree` through that position's value in every
 /// profile, and evaluates it at the sweep angle. Degree 1 is piecewise-linear
-/// blending and is what this phase translates; degrees 2 and 3 need the global
-/// NURBS interpolation that lands with the rest of the spline machinery in
-/// Phase C (#19), and `discretize` reports them as [`Error::Unsupported`]
-/// until then rather than silently blending linearly and producing a subtly
-/// wrong surface.
+/// blending and is what the port translates; degrees 2 and 3 need that global
+/// interpolation, which is a *fitting* problem — solving for the control points
+/// that make a curve pass through given points — and so is not supplied by the
+/// spline evaluators of [`crate::scenegraph::curve`]. `discretize` reports them
+/// as [`Error::Unsupported`] rather than silently blending linearly and
+/// producing a subtly wrong surface.
 ///
 /// [`Error::Unsupported`]: crate::Error::Unsupported
 #[derive(Debug, Clone, PartialEq)]
@@ -179,7 +180,7 @@ impl Swung {
         }
         let mut expected: Option<usize> = None;
         for profile in &self.profiles {
-            let points = profile.sample(curve_samples)?;
+            let points = profile.discretize(curve_samples)?;
             if points.len() < 2 {
                 return Err(Error::degenerate(
                     "a swung profile needs at least 2 points",

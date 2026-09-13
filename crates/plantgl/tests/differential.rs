@@ -48,11 +48,15 @@ use plantgl::algo::bbox::bounding_box;
 use plantgl::algo::discretize::{discretize_with, DiscretizeCtx, Explicit};
 use plantgl::algo::measure::{surface_area, volume};
 use plantgl::algo::tessellate::tessellate;
-use plantgl::math::{Point2, Real, Vec3};
-use plantgl::scenegraph::curve::{Curve2D, Polyline2D};
+use plantgl::math::{Point2, Point3, Real, Vec2, Vec3, Vec4};
+use plantgl::scenegraph::curve::{
+    BezierCurve, BezierCurve2D, BezierPatch, CtrlPointMatrix, Curve2D, Curve3D, NurbsCurve,
+    NurbsCurve2D, NurbsPatch, ParametricCurve, Polyline2D,
+};
+use plantgl::scenegraph::mesh::Polyline;
 use plantgl::scenegraph::primitive::{
-    Box3, Cone, Cylinder, Disc, ElevationGrid, Frustum, HeightField, Paraboloid, Revolution,
-    Sphere,
+    Box3, Cone, Cylinder, Disc, ElevationGrid, Extrusion, Frustum, HeightField, Paraboloid,
+    Revolution, Sphere,
 };
 use plantgl::Geometry;
 
@@ -107,6 +111,53 @@ fn pole_collapse(case: &str) -> usize {
         .map_or(0, |(_, c)| c.poles)
 }
 
+/// The stride `upstream_measure.py` pins every curve case at.
+const CURVE_STRIDE: u32 = 24;
+
+/// How closely a sampled curve must agree with upstream's.
+///
+/// Upstream evaluates in `f32` throughout; the port widens knots and basis
+/// functions to `f64` and narrows only the finished point, so on these curves
+/// upstream is the less accurate of the two by around `1e-6` on coordinates of
+/// order 5. `1e-4` is four orders looser than that and four orders tighter than
+/// any mistranslation — a wrong span, a transposed control point or a dropped
+/// weight moves a point by a tenth of the curve, not a ten-thousandth.
+const CURVE_TOLERANCE: Real = 1e-4;
+
+/// The third documented divergence, after the collapsed poles and the errored
+/// volume: **the port's swept frames are rotation-minimising and upstream's are
+/// not.**
+///
+/// Upstream's `Extrusion::getNextFrameAt` crosses the previous binormal with
+/// the new tangent — the projection method, second-order accurate in the twist.
+/// The port carries frames by double reflection (Wang et al. 2008), which is
+/// fourth-order. Both are rotation-minimising in the limit and both produce the
+/// *same tangent* at every ring, so the two meshes differ only by a rotation of
+/// each ring about its own axis.
+///
+/// That makes the difference bounded rather than open-ended, and bounded by
+/// something derivable rather than a fudge factor. The cross-section here is a
+/// circle sampled as an *n*-gon: rotating an *n*-gon inscribed in a circle of
+/// radius `r` moves its outline by at most the sagitta `r(1 - cos(π/n))`, so no
+/// vertex can leave that shell and the bounding box cannot move further than
+/// it. Returns that bound, or `None` for the cases where the two frame chains
+/// provably coincide — every straight axis, where there is no rotation to
+/// minimise and the meshes must match exactly.
+fn frame_divergence_bound(case: &str, slices: u8) -> Option<Real> {
+    (case == "extrusion_helix").then(|| {
+        const CROSS_SECTION_RADIUS: Real = 0.15;
+        CROSS_SECTION_RADIUS * (1.0 - (std::f32::consts::PI / slices as Real).cos())
+    })
+}
+
+/// The same divergence, as a relative area tolerance.
+///
+/// Both meshes inscribe the same tube in the same rings, so the areas differ
+/// only through how each ring's *n*-gon lines up with its neighbour's. That is
+/// a second-order effect in the per-step twist, and 1% is well inside it while
+/// still catching a mesh that is wrong rather than merely rotated.
+const FRAME_DIVERGENCE_AREA_TOLERANCE: Real = 0.01;
+
 /// Cases where **upstream's own analytic formula is wrong**, with the correct
 /// closed form to compare against instead.
 ///
@@ -154,6 +205,49 @@ fn profile(points: &[(Real, Real)]) -> plantgl::scenegraph::curve::Curve2DRef {
         points.iter().map(|(x, y)| Point2::new(*x, *y)).collect(),
     ))
     .into_ref()
+}
+
+fn straight_axis(height: Real, segments: usize) -> plantgl::scenegraph::curve::Curve3DRef {
+    Curve3D::from(Polyline::new(
+        (0..=segments)
+            .map(|i| Point3::new(0.0, 0.0, height * i as Real / segments as Real))
+            .collect(),
+    ))
+    .into_ref()
+}
+
+/// The helix `upstream_measure.py`'s `helix_axis` builds.
+fn helix_axis(turns: Real, segments: usize) -> plantgl::scenegraph::curve::Curve3DRef {
+    let (a, b) = (1.0, 0.35);
+    Curve3D::from(Polyline::new(
+        (0..=segments)
+            .map(|i| {
+                let t = turns * std::f32::consts::TAU * i as Real / segments as Real;
+                Point3::new(a * t.cos(), a * t.sin(), b * t)
+            })
+            .collect(),
+    ))
+    .into_ref()
+}
+
+fn circle_section(radius: Real, slices: u8) -> plantgl::scenegraph::curve::Curve2DRef {
+    Curve2D::from(Polyline2D::circle(radius, slices)).into_ref()
+}
+
+/// `PATCH_ROWS` in `upstream_measure.py`, as a `[u][v]` control net.
+fn patch_net() -> CtrlPointMatrix {
+    let rows = [
+        [(0.0, 0.0, 0.0), (0.0, 1.0, 0.8), (0.0, 2.0, -0.2), (0.0, 3.0, 0.0)],
+        [(1.0, 0.0, 0.5), (1.0, 1.0, 2.0), (1.0, 2.0, 1.0), (1.0, 3.0, -0.4)],
+        [(2.0, 0.0, -0.3), (2.0, 1.0, 0.9), (2.0, 2.0, 1.4), (2.0, 3.0, 0.2)],
+        [(3.0, 0.0, 0.0), (3.0, 1.0, -0.6), (3.0, 2.0, 0.3), (3.0, 3.0, 0.0)],
+    ];
+    CtrlPointMatrix::from_point_rows(
+        rows.iter()
+            .map(|row| row.iter().map(|(x, y, z)| Point3::new(*x, *y, *z)).collect())
+            .collect(),
+    )
+    .unwrap()
 }
 
 /// Every case, built at the given slice count. The names and the parameters
@@ -204,8 +298,193 @@ fn build(case: &str, s: u8) -> Option<Geometry> {
                 true,
             ))
         }
+
+        // --- Phase C (#19) --------------------------------------------------
+        "bezier_patch_bump" => {
+            Geometry::from(BezierPatch::new(patch_net()).with_strides(s as u32, s as u32))
+        }
+        "nurbs_patch_bump" => {
+            Geometry::from(NurbsPatch::new(patch_net(), 3, 3).with_strides(s as u32, s as u32))
+        }
+        "extrusion_straight" => Geometry::from(Extrusion::new(
+            straight_axis(2.0, 8),
+            circle_section(0.5, s),
+        )),
+        "extrusion_straight_solid" => Geometry::from(
+            Extrusion::new(straight_axis(2.0, 8), circle_section(0.5, s)).with_solid(true),
+        ),
+        "extrusion_open_section" => Geometry::from(Extrusion::new(
+            straight_axis(2.0, 6),
+            profile(&[(1.0, 0.0), (0.5, 0.8), (-0.5, 0.8), (-1.0, 0.0)]),
+        )),
+        "extrusion_tapered" => Geometry::from(
+            Extrusion::new(straight_axis(3.0, 8), circle_section(1.0, s))
+                .with_scale(vec![Vec2::new(1.0, 1.0), Vec2::new(0.25, 0.25)]),
+        ),
+        "extrusion_twisted" => Geometry::from(
+            Extrusion::new(
+                straight_axis(2.0, 8),
+                profile(&[
+                    (1.0, 0.0),
+                    (0.3, 0.6),
+                    (-1.0, 0.0),
+                    (0.3, -0.6),
+                    (1.0, 0.0),
+                ]),
+            )
+            .with_orientation(vec![0.0, std::f32::consts::FRAC_PI_3]),
+        ),
+        "extrusion_helix" => Geometry::from(Extrusion::new(
+            helix_axis(2.0, 64),
+            circle_section(0.15, s),
+        )),
         _ => return None,
     })
+}
+
+/// The curve cases, mirroring `CURVE_CASES` in `upstream_measure.py`.
+///
+/// A curve is not a mesh: upstream's discretizer reduces it to a `Polyline`, so
+/// there is no area or face count to compare. What there is instead is the only
+/// thing that matters about an evaluator — where it says the curve is.
+enum SampledCurve {
+    ThreeD(Curve3D),
+    TwoD(Curve2D),
+}
+
+fn build_curve(case: &str) -> Option<SampledCurve> {
+    let three_d = |curve: Curve3D| Some(SampledCurve::ThreeD(curve));
+    let two_d = |curve: Curve2D| Some(SampledCurve::TwoD(curve));
+    match case {
+        "bezier_curve_cubic" => three_d(Curve3D::from(
+            BezierCurve::new(vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 4.0, -2.0),
+                Point3::new(3.0, -1.0, 2.0),
+                Point3::new(5.0, 2.0, 0.0),
+            ])
+            .with_stride(CURVE_STRIDE),
+        )),
+        "bezier_curve_rational" => three_d(Curve3D::from(
+            BezierCurve::rational(vec![
+                Vec4::new(1.0, 0.0, 0.0, 1.0),
+                Vec4::new(1.0, 1.0, 0.0, 0.5),
+                Vec4::new(0.0, 1.0, 1.0, 2.0),
+                Vec4::new(-1.0, 0.0, 1.0, 1.0),
+            ])
+            .with_stride(CURVE_STRIDE),
+        )),
+        "nurbs_curve_cubic" => three_d(Curve3D::from(
+            NurbsCurve::new(
+                vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(1.0, 2.0, 0.0),
+                    Point3::new(2.0, -1.0, 1.0),
+                    Point3::new(3.0, 1.0, 2.0),
+                    Point3::new(4.0, 0.0, 0.0),
+                    Point3::new(5.0, 2.0, 1.0),
+                ],
+                3,
+            )
+            .with_stride(CURVE_STRIDE),
+        )),
+        "nurbs_curve_knots" => three_d(Curve3D::from(
+            NurbsCurve::with_knots(
+                vec![
+                    Vec4::new(0.0, 0.0, 0.0, 1.0),
+                    Vec4::new(1.0, 3.0, 0.0, 1.0),
+                    Vec4::new(2.0, 0.0, 2.0, 1.0),
+                    Vec4::new(4.0, 1.0, 0.0, 1.0),
+                    Vec4::new(5.0, -1.0, 1.0, 1.0),
+                ],
+                2,
+                vec![0.0, 0.0, 0.0, 0.3, 0.75, 1.0, 1.0, 1.0],
+            )
+            .expect("a valid knot vector")
+            .with_stride(CURVE_STRIDE),
+        )),
+        "bezier_curve_2d" => two_d(Curve2D::from(
+            BezierCurve2D::new(vec![
+                Point2::new(0.0, 0.0),
+                Point2::new(1.0, 2.0),
+                Point2::new(3.0, -1.0),
+                Point2::new(4.0, 0.0),
+            ])
+            .with_stride(CURVE_STRIDE),
+        )),
+        "nurbs_curve_2d_circle" => {
+            two_d(Curve2D::from(NurbsCurve2D::circle(1.0).with_stride(CURVE_STRIDE)))
+        }
+        _ => None,
+    }
+}
+
+impl SampledCurve {
+    fn first_knot(&self) -> Real {
+        match self {
+            SampledCurve::ThreeD(c) => c.first_knot(),
+            SampledCurve::TwoD(c) => c.first_knot(),
+        }
+    }
+
+    fn last_knot(&self) -> Real {
+        match self {
+            SampledCurve::ThreeD(c) => c.last_knot(),
+            SampledCurve::TwoD(c) => c.last_knot(),
+        }
+    }
+
+    /// The point at `u`, always as three coordinates; a 2D curve sits at
+    /// `z = 0`, which is how upstream's discretizer embeds it too.
+    fn eval(&self, u: Real) -> [Real; 3] {
+        match self {
+            SampledCurve::ThreeD(c) => {
+                let p = c.eval(u).expect("evaluation");
+                [p.x, p.y, p.z]
+            }
+            SampledCurve::TwoD(c) => {
+                let p = c.eval(u).expect("evaluation");
+                [p.x, p.y, 0.0]
+            }
+        }
+    }
+
+    fn tangent(&self, u: Real) -> [Real; 3] {
+        match self {
+            SampledCurve::ThreeD(c) => {
+                let t = c.tangent(u).expect("tangent");
+                [t.x, t.y, t.z]
+            }
+            SampledCurve::TwoD(c) => {
+                let t = c.tangent(u).expect("tangent");
+                [t.x, t.y, 0.0]
+            }
+        }
+    }
+
+    fn discretize(&self) -> Vec<[Real; 3]> {
+        match self {
+            SampledCurve::ThreeD(c) => c
+                .discretize(CURVE_STRIDE)
+                .expect("discretisation")
+                .into_iter()
+                .map(|p| [p.x, p.y, p.z])
+                .collect(),
+            SampledCurve::TwoD(c) => c
+                .discretize(CURVE_STRIDE)
+                .expect("discretisation")
+                .into_iter()
+                .map(|p| [p.x, p.y, 0.0])
+                .collect(),
+        }
+    }
+
+    fn length(&self) -> Real {
+        match self {
+            SampledCurve::ThreeD(c) => c.length(CURVE_STRIDE).expect("length"),
+            SampledCurve::TwoD(c) => c.length(CURVE_STRIDE).expect("length"),
+        }
+    }
 }
 
 // --- Reading the reference --------------------------------------------------
@@ -217,6 +496,7 @@ struct Reference {
     faces: usize,
     triangles: usize,
     degenerate_faces: usize,
+    inward_faces: usize,
     solid: bool,
     ccw: bool,
     bbox_min: [Real; 3],
@@ -312,6 +592,29 @@ mod mini_json {
         rest[..end].trim().trim_matches('"')
     }
 
+    /// A flat array of numbers, however it is wrapped across lines. The
+    /// generator writes point lists flattened precisely so this stays a
+    /// bracket scan rather than a JSON parser.
+    pub fn numbers(body: &str, key: &str) -> Vec<f32> {
+        let needle = format!("\"{key}\"");
+        let start = body
+            .find(&needle)
+            .unwrap_or_else(|| panic!("reference is missing array {key:?}"))
+            + needle.len();
+        let open = start + body[start..].find('[').expect("array open");
+        let close = open + body[open..].find(']').expect("array close");
+        body[open + 1..close]
+            .split(',')
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                value
+                    .trim()
+                    .parse::<f32>()
+                    .unwrap_or_else(|e| panic!("bad number in {key}: {value:?}: {e}"))
+            })
+            .collect()
+    }
+
     pub fn triple(body: &str, key: &str) -> [f32; 3] {
         let needle = format!("\"{key}\"");
         let start = body.find(&needle).expect("triple key") + needle.len();
@@ -356,6 +659,7 @@ fn references() -> BTreeMap<String, Reference> {
                 faces: count("faces"),
                 triangles: count("triangles"),
                 degenerate_faces: count("degenerate_faces"),
+                inward_faces: count("inward_faces"),
                 solid: flag("solid"),
                 ccw: flag("ccw"),
                 bbox_min: mini_json::triple(&body, "bbox_min"),
@@ -364,6 +668,62 @@ fn references() -> BTreeMap<String, Reference> {
                 volume: number("volume"),
                 area_measures_mesh: flag("area_measures_mesh"),
                 volume_measures_mesh: flag("volume_measures_mesh"),
+            };
+            (name, reference)
+        })
+        .collect()
+}
+
+/// One upstream curve measurement.
+#[derive(Debug, Clone)]
+struct CurveReference {
+    first_knot: Real,
+    last_knot: Real,
+    stride: u32,
+    dimensions: usize,
+    samples: Vec<[Real; 3]>,
+    tangents: Vec<[Real; 3]>,
+    tangent_is_comparable: bool,
+    tangent_endpoints_comparable: bool,
+    discretized: Vec<[Real; 3]>,
+    length: Real,
+}
+
+fn curve_references() -> BTreeMap<String, CurveReference> {
+    let curves =
+        mini_json::object_body(REFERENCE, "curves").expect("reference has a `curves` object");
+
+    mini_json::entries(curves)
+        .into_iter()
+        .map(|(name, body)| {
+            let dimensions: usize = mini_json::scalar(&body, "dimensions").parse().expect("dims");
+            // A 2D curve's points are written as pairs; pad them to triples so
+            // both kinds compare through one code path, exactly as upstream's
+            // discretizer embeds a 2D curve at z = 0.
+            let group = |key: &str| -> Vec<[Real; 3]> {
+                mini_json::numbers(&body, key)
+                    .chunks(dimensions)
+                    .map(|c| [c[0], c[1], if dimensions == 3 { c[2] } else { 0.0 }])
+                    .collect()
+            };
+            let reference = CurveReference {
+                first_knot: mini_json::scalar(&body, "first_knot").parse().expect("first"),
+                last_knot: mini_json::scalar(&body, "last_knot").parse().expect("last"),
+                stride: mini_json::scalar(&body, "stride").parse().expect("stride"),
+                dimensions,
+                samples: group("samples"),
+                tangents: group("tangents"),
+                tangent_is_comparable: mini_json::scalar(&body, "tangent_is_comparable") == "true",
+                tangent_endpoints_comparable: mini_json::scalar(
+                    &body,
+                    "tangent_endpoints_comparable",
+                ) == "true",
+                // The discretizer always writes three coordinates.
+                discretized: mini_json::numbers(&body, "discretized")
+                    .chunks(3)
+                    .map(|c| [c[0], c[1], c[2]])
+                    .collect(),
+                length: mini_json::scalar(&body, "length").parse().expect("length"),
             };
             (name, reference)
         })
@@ -381,6 +741,23 @@ fn relative_error(actual: Real, expected: Real) -> Real {
         return actual.abs();
     }
     ((actual - expected) / expected).abs()
+}
+
+fn norm(v: [Real; 3]) -> Real {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+fn distance(a: [Real; 3], b: [Real; 3]) -> Real {
+    norm([a[0] - b[0], a[1] - b[1], a[2] - b[2]])
+}
+
+/// A vector normalised, for comparing directions rather than magnitudes.
+fn direction(v: [Real; 3]) -> [Real; 3] {
+    let n = norm(v);
+    if n <= 1e-9 {
+        return v;
+    }
+    [v[0] / n, v[1] / n, v[2] / n]
 }
 
 // --- The tests --------------------------------------------------------------
@@ -413,11 +790,21 @@ fn every_reference_case_is_covered() {
     }
     assert!(missing.is_empty(), "no Rust builder for: {missing:?}");
 
-    // And the coverage the issue asks for: every T8.4 primitive, at two slice
-    // counts each.
+    // And the coverage the issues ask for: every T8.4 primitive and every T8.7
+    // sweep, at two slice counts each.
     for required in [
-        "box", "sphere", "cone", "cylinder", "frustum", "disc", "paraboloid", "revolution",
+        "box",
+        "sphere",
+        "cone",
+        "cylinder",
+        "frustum",
+        "disc",
+        "paraboloid",
+        "revolution",
         "elevation_grid",
+        "bezier_patch",
+        "nurbs_patch",
+        "extrusion",
     ] {
         let count = references
             .keys()
@@ -563,9 +950,14 @@ fn bounding_boxes_match_upstream() {
         .iter()
         .enumerate()
         {
-            if (ours - theirs).abs() > BBOX_TOLERANCE {
+            // A helix sweep's rings are rotated relative to upstream's, so its
+            // box may differ by the cross-section's sagitta and no more.
+            let tolerance =
+                BBOX_TOLERANCE + frame_divergence_bound(case, slices).unwrap_or(0.0);
+            if (ours - theirs).abs() > tolerance {
                 failures.push(format!(
-                    "{key}: bbox component {axis} ours={ours} upstream={theirs}"
+                    "{key}: bbox component {axis} ours={ours} upstream={theirs} \
+                     (tolerance {tolerance})"
                 ));
             }
         }
@@ -602,7 +994,12 @@ fn surface_areas_match_upstream() {
         let expected = defect.unwrap_or(reference.area);
         let error = relative_error(ours, expected);
 
-        let (tolerance, kind) = if reference.area_measures_mesh {
+        let (tolerance, kind) = if frame_divergence_bound(case, slices).is_some() {
+            (
+                FRAME_DIVERGENCE_AREA_TOLERANCE,
+                "mesh-measured, rings rotated by the frame divergence",
+            )
+        } else if reference.area_measures_mesh {
             // Both sides measured the same mesh: they must agree, not merely
             // be close.
             (MESH_TOLERANCE, "mesh-measured")
@@ -816,6 +1213,510 @@ fn known_upstream_area_defects_are_still_present() {
         relative_error(cone, correct_cone) < 1e-4,
         "at r = 1 upstream's frustum area {cone} should coincide with the correct {correct_cone}"
     );
+}
+
+// --- Curves (T8.6) ----------------------------------------------------------
+
+/// Every curve in the reference is built here, and the T8.6 deliverables are
+/// each represented.
+#[test]
+fn every_reference_curve_is_covered() {
+    let curves = curve_references();
+    assert!(!curves.is_empty(), "the reference has no curve cases");
+
+    let missing: Vec<&String> = curves
+        .keys()
+        .filter(|name| build_curve(name).is_none())
+        .collect();
+    assert!(missing.is_empty(), "no Rust builder for: {missing:?}");
+
+    for required in [
+        "bezier_curve_cubic",
+        "bezier_curve_rational",
+        "nurbs_curve_cubic",
+        "nurbs_curve_knots",
+        "bezier_curve_2d",
+        "nurbs_curve_2d_circle",
+    ] {
+        assert!(curves.contains_key(required), "{required} is not covered");
+    }
+
+    // The knot ranges have to agree before anything sampled over them can.
+    for (name, reference) in &curves {
+        let curve = build_curve(name).expect("covered");
+        assert!(
+            (curve.first_knot() - reference.first_knot).abs() < 1e-6
+                && (curve.last_knot() - reference.last_knot).abs() < 1e-6,
+            "{name}: knot range ours=[{}, {}] upstream=[{}, {}]",
+            curve.first_knot(),
+            curve.last_knot(),
+            reference.first_knot,
+            reference.last_knot
+        );
+        assert_eq!(reference.stride, CURVE_STRIDE, "{name}: stride");
+
+        // A 2D curve is embedded at z = 0 by both sides, which is what lets
+        // every comparison below run through one three-coordinate path.
+        assert!(matches!(reference.dimensions, 2 | 3), "{name}: dimensions");
+        if reference.dimensions == 2 {
+            assert!(
+                reference.discretized.iter().all(|p| p[2].abs() < 1e-9),
+                "{name}: upstream should embed a 2D curve at z = 0"
+            );
+            assert!(
+                curve.discretize().iter().all(|p| p[2].abs() < 1e-9),
+                "{name}: the port should embed a 2D curve at z = 0"
+            );
+        }
+    }
+}
+
+/// ⭐ The T8.6 acceptance criterion: curve samples match upstream's within
+/// tolerance.
+#[test]
+fn curve_samples_match_upstream() {
+    let mut failures = Vec::new();
+
+    for (name, reference) in curve_references() {
+        let curve = build_curve(&name).expect("covered");
+        let count = reference.samples.len();
+        assert!(count > 2, "{name}: too few samples to mean anything");
+
+        for (i, theirs) in reference.samples.iter().enumerate() {
+            let u = reference.first_knot
+                + (reference.last_knot - reference.first_knot) * i as Real / (count - 1) as Real;
+            let ours = curve.eval(u);
+            let error = distance(ours, *theirs);
+            if error > CURVE_TOLERANCE {
+                failures.push(format!(
+                    "{name} at u={u}: ours={ours:?} upstream={theirs:?} error {error}"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "curve samples diverged from upstream:\n  {}",
+        failures.join("\n  ")
+    );
+}
+
+/// The discretisation itself — the polyline a `Discretizer` turns each curve
+/// into, which is what every downstream algorithm actually consumes.
+#[test]
+fn curve_discretisations_match_upstream() {
+    let mut failures = Vec::new();
+
+    for (name, reference) in curve_references() {
+        let curve = build_curve(&name).expect("covered");
+        let ours = curve.discretize();
+        if ours.len() != reference.discretized.len() {
+            failures.push(format!(
+                "{name}: {} points against upstream's {}",
+                ours.len(),
+                reference.discretized.len()
+            ));
+            continue;
+        }
+        for (i, (ours, theirs)) in ours.iter().zip(&reference.discretized).enumerate() {
+            let error = distance(*ours, *theirs);
+            if error > CURVE_TOLERANCE {
+                failures.push(format!("{name}: point {i} is {error} away from upstream's"));
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "curve discretisations diverged from upstream:\n  {}",
+        failures.join("\n  ")
+    );
+}
+
+/// Tangents, where upstream's are trustworthy.
+///
+/// `NurbsCurve::getTangentAt` goes through `deriveAt`, which applies the
+/// quotient rule and is right for rational curves; the port must agree with it.
+/// `BezierCurve::getTangentAt` does not, and the case that exposes it is pinned
+/// separately below.
+#[test]
+fn curve_tangents_match_upstream() {
+    let mut failures = Vec::new();
+    let mut checked = 0;
+
+    for (name, reference) in curve_references() {
+        if !reference.tangent_is_comparable {
+            continue;
+        }
+        checked += 1;
+        let curve = build_curve(&name).expect("covered");
+        let count = reference.tangents.len();
+
+        for (i, theirs) in reference.tangents.iter().enumerate() {
+            if !reference.tangent_endpoints_comparable && (i == 0 || i == count - 1) {
+                continue;
+            }
+            let u = reference.first_knot
+                + (reference.last_knot - reference.first_knot) * i as Real / (count - 1) as Real;
+            let ours = curve.tangent(u);
+            // Compared relative to the tangent's own magnitude: a degree-3
+            // curve's derivative is three times the size of its coordinates,
+            // and it is the direction and scale together that must agree.
+            let scale = norm(*theirs).max(1.0);
+            let error = distance(ours, *theirs) / scale;
+            if error > CURVE_TOLERANCE {
+                failures.push(format!(
+                    "{name} at u={u}: tangent ours={ours:?} upstream={theirs:?} \
+                     relative error {error}"
+                ));
+            }
+        }
+    }
+
+    assert!(checked >= 4, "only {checked} curves had comparable tangents");
+    assert!(
+        failures.is_empty(),
+        "curve tangents diverged from upstream:\n  {}",
+        failures.join("\n  ")
+    );
+}
+
+/// **`BezierCurve::getTangentAt` is wrong for a rational curve, and the port
+/// does not reproduce it.**
+///
+/// Upstream differences the stored control points — which are Cartesian points
+/// plus a weight, not homogeneous points — and calls `project()` on the result,
+/// dividing by a *difference of weights*. For an all-weight-1 curve that
+/// difference is zero and the guard returns the correct answer, which is why
+/// every other Bézier case compares as normal. For this one it is not a tangent
+/// at all.
+///
+/// Both halves are asserted, so neither can rot: the port's tangent matches a
+/// central difference of *upstream's own sampled points* — upstream's points
+/// being correct — and upstream's tangent does not. If a rebase fixes
+/// `getTangentAt`, the second assertion fails and this test should be replaced
+/// by adding the case back to the comparable set.
+#[test]
+fn the_rational_bezier_tangent_defect_is_still_present() {
+    let name = "bezier_curve_rational";
+    let reference = &curve_references()[name];
+    assert!(
+        !reference.tangent_is_comparable,
+        "{name} is marked comparable, so this test has nothing to pin"
+    );
+
+    let curve = build_curve(name).expect("covered");
+    let count = reference.samples.len();
+    let step = (reference.last_knot - reference.first_knot) / (count - 1) as Real;
+
+    let mut ours_agrees = 0;
+    let mut upstream_disagrees = 0;
+    // Interior samples only: a central difference needs a neighbour each side.
+    for i in 1..count - 1 {
+        let u = reference.first_knot + step * i as Real;
+        let numeric = direction([
+            (reference.samples[i + 1][0] - reference.samples[i - 1][0]) / (2.0 * step),
+            (reference.samples[i + 1][1] - reference.samples[i - 1][1]) / (2.0 * step),
+            (reference.samples[i + 1][2] - reference.samples[i - 1][2]) / (2.0 * step),
+        ]);
+
+        // The port's tangent is the real derivative, so it points where the
+        // curve is actually going. The yardstick is a central difference over
+        // a thirty-second of the curve, whose own truncation error is a few
+        // parts in a thousand — hence the threshold, which is still two orders
+        // below how far upstream's answer lands from it.
+        let ours = direction(curve.tangent(u));
+        assert!(
+            distance(ours, numeric) < 5e-3,
+            "the port's tangent at u={u} is {ours:?}, but the curve goes {numeric:?}"
+        );
+        ours_agrees += 1;
+
+        if distance(direction(reference.tangents[i]), numeric) > 5e-2 {
+            upstream_disagrees += 1;
+        }
+    }
+
+    assert!(ours_agrees > 20, "too few samples checked");
+    assert!(
+        upstream_disagrees > ours_agrees / 2,
+        "upstream's rational Bézier tangent now agrees with the curve's own \
+         direction at all but {} of {ours_agrees} samples — the defect looks \
+         fixed, so move `bezier_curve_rational` into the comparable set",
+        upstream_disagrees
+    );
+}
+
+/// **`BezierCurve::getTangentAt` is also wrong at both of its end points**, and
+/// differently wrong at each.
+///
+/// Its interior branch is the true derivative, `n · Σ (P[i+1] - P[i]) B[i,n-1]`.
+/// Its two special cases are not:
+///
+/// - at `u = 0` it returns `P1 - P0` **normalised**, a unit vector where the
+///   derivative has magnitude `n · |P1 - P0|`;
+/// - at `u = 1` it returns `P[n] - P[n-1]` **unscaled**, short by the factor
+///   `n`.
+///
+/// So upstream's own tangent field is discontinuous at both ends of every
+/// Bézier curve, including the all-weight-1 ones. The port returns the
+/// derivative throughout, which is the limit of upstream's interior branch —
+/// asserted here from upstream's own recorded numbers, so the diagnosis is
+/// falsifiable and not just "we differ".
+#[test]
+fn the_bezier_endpoint_tangent_defects_are_still_present() {
+    let curves = curve_references();
+    let mut checked = 0;
+
+    for (name, reference) in &curves {
+        // Weight-1 Bézier curves only: a *rational* one goes through
+        // `project()` at both ends as well, so its endpoint values are wrong in
+        // the compounded way `the_rational_bezier_tangent_defect_is_still_present`
+        // pins instead, and the two clean statements below do not hold there.
+        if reference.tangent_endpoints_comparable || !reference.tangent_is_comparable {
+            continue;
+        }
+        checked += 1;
+        let curve = build_curve(name).expect("covered");
+        let last = reference.tangents.len() - 1;
+
+        // At u = 0 upstream's vector is a unit one where the derivative is not.
+        let theirs_start = reference.tangents[0];
+        let ours_start = curve.tangent(reference.first_knot);
+        assert!(
+            (norm(theirs_start) - 1.0).abs() < 1e-5,
+            "{name}: upstream's tangent at u = 0 is {theirs_start:?}, no longer \
+             a unit vector — the defect looks fixed"
+        );
+        assert!(
+            norm(ours_start) > 1.0 + 1e-3,
+            "{name}: the port's tangent at u = 0 should be the derivative, not \
+             a unit vector"
+        );
+        // Same direction, though: only the magnitude is wrong.
+        assert!(
+            distance(direction(ours_start), direction(theirs_start)) < 1e-5,
+            "{name}: the port and upstream disagree on the *direction* at u = 0"
+        );
+
+        // At u = 1 upstream is short by exactly the degree.
+        let theirs_end = reference.tangents[last];
+        let ours_end = curve.tangent(reference.last_knot);
+        let ratio = norm(ours_end) / norm(theirs_end);
+        assert!(
+            (ratio - 3.0).abs() < 1e-3,
+            "{name}: the port's end tangent is {ratio}x upstream's, expected the \
+             curve's degree (3) — upstream's missing factor looks fixed"
+        );
+        assert!(
+            distance(direction(ours_end), direction(theirs_end)) < 1e-5,
+            "{name}: the port and upstream disagree on the *direction* at u = 1"
+        );
+
+        // And the port's end points are the limit of upstream's own interior
+        // branch, which is the positive claim behind ignoring its end points.
+        let step = (reference.last_knot - reference.first_knot) / last as Real;
+        for u in [reference.first_knot, reference.last_knot] {
+            let inward = if u == reference.first_knot { step } else { -step };
+            let interior = if u == reference.first_knot {
+                reference.tangents[1]
+            } else {
+                reference.tangents[last - 1]
+            };
+            let extrapolated = curve.tangent(u + inward);
+            assert!(
+                distance(extrapolated, interior) / norm(interior).max(1.0) < CURVE_TOLERANCE,
+                "{name}: one step in from u = {u} the port gives {extrapolated:?} \
+                 against upstream's interior {interior:?}"
+            );
+        }
+    }
+
+    assert!(checked >= 2, "only {checked} Bézier curves were pinned");
+}
+
+/// Curve length, which is what a swept surface's texture coordinates and a
+/// turtle's step both run on.
+#[test]
+fn curve_lengths_match_upstream() {
+    let mut failures = Vec::new();
+
+    for (name, reference) in curve_references() {
+        let curve = build_curve(&name).expect("covered");
+        let ours = curve.length();
+        // Both sides measure the same polyline through the same samples, so
+        // this is a mesh-to-mesh comparison and not a convergence one.
+        let error = relative_error(ours, reference.length);
+        if error > MESH_TOLERANCE {
+            failures.push(format!(
+                "{name}: length ours={ours} upstream={} relative error {error}",
+                reference.length
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "curve lengths diverged from upstream:\n  {}",
+        failures.join("\n  ")
+    );
+}
+
+/// The frame divergence, asserted rather than excused.
+///
+/// Where the axis is straight the two frame chains provably coincide, so the
+/// meshes must be identical vertex for vertex — that is what the strict
+/// comparisons in the tests above already say for `extrusion_straight` and its
+/// siblings. Where the axis has torsion they differ, and this says by how much:
+/// each ring is *rotated*, so every one of the port's vertices still lies on
+/// upstream's ring, within the tolerance that the ring is a polygon at all.
+#[test]
+fn the_frame_divergence_is_only_a_rotation_of_each_ring() {
+    let references = references();
+    let mut checked = 0;
+
+    for (key, reference) in &references {
+        let (case, slices) = split_key(key);
+        let Some(bound) = frame_divergence_bound(case, slices) else {
+            continue;
+        };
+        checked += 1;
+
+        let mesh = discretize_with(
+            &build(case, slices).expect("covered"),
+            DiscretizeCtx {
+                slices,
+                stacks: slices,
+                curve_samples: 64,
+            },
+        )
+        .expect("discretisation");
+
+        // Same topology: the divergence moves vertices, it does not add or
+        // drop any.
+        assert_eq!(mesh.points().len(), reference.points, "{key}: point count");
+        assert_eq!(mesh.face_count(), reference.faces, "{key}: face count");
+
+        // The helix axis is a circle of radius 1 in x and y, and the sweep is
+        // a tube of radius 0.15 around it, so every vertex sits between those
+        // two shells whichever way its ring is turned. A frame *flip* — the
+        // failure this whole divergence is here to avoid — would put vertices
+        // outside them.
+        for (i, point) in mesh.points().iter().enumerate() {
+            let radial = (point.x * point.x + point.y * point.y).sqrt();
+            assert!(
+                (radial - 1.0).abs() <= 0.15 + bound + BBOX_TOLERANCE,
+                "{key}: vertex {i} is {radial} from the helix axis, off the tube"
+            );
+        }
+    }
+
+    assert!(checked > 0, "no frame-divergence case was actually checked");
+}
+
+/// **Upstream's solid `Extrusion` has an inverted base**, and the port does not.
+///
+/// `Discretizer::process(Extrusion*)` fans both end caps in the same vertex
+/// order — `range<Index>(nbPoints, 0, 1)` at the near end and the same from the
+/// last ring — and a cross-section wound counter-clockwise in the frame's
+/// `(left, up)` plane fans to a normal along `+heading`. At the far end that
+/// points out of the solid; at the near end it points straight in. So every
+/// solid `Extrusion` upstream produces has a base that faces the wrong way.
+///
+/// Nothing upstream notices. `VolComputer` sums the *absolute* tetrahedra about
+/// the centroid, so a flipped face changes neither its volume nor the face
+/// count nor the area — which is why every other comparison in this file passes
+/// on this case regardless. A renderer notices, and so does any signed volume.
+///
+/// The reference records, per case, how many faces point back towards the
+/// middle of the mesh. This asserts three things from it: upstream's count is
+/// exactly one cap's fan on the solid sweep, it is zero on every other solid
+/// case (so the measure means something and upstream is not being accused
+/// wholesale), and the port's own count is zero on the same mesh.
+#[test]
+fn the_inverted_extrusion_base_is_upstreams_alone() {
+    let mut checked = 0;
+
+    for (key, reference) in references() {
+        let (case, slices) = split_key(&key);
+        // The inward/outward test only means anything on a closed mesh.
+        if !reference.solid {
+            continue;
+        }
+        let mesh = discretize_with(
+            &build(case, slices).expect("covered"),
+            DiscretizeCtx {
+                slices,
+                stacks: slices,
+                curve_samples: 64,
+            },
+        )
+        .expect("discretisation");
+
+        if case == "extrusion_straight_solid" {
+            checked += 1;
+            // One triangle fan over the cross-section's `slices` points is
+            // `slices - 2` triangles, and upstream has exactly that many facing
+            // the wrong way: one whole cap, not a stray face.
+            assert_eq!(
+                reference.inward_faces,
+                slices as usize - 2,
+                "{key}: upstream's inverted base should be exactly one cap's fan \
+                 — if it is now 0 the defect is fixed and the port's reversal \
+                 should be removed"
+            );
+        } else {
+            assert_eq!(
+                reference.inward_faces, 0,
+                "{key}: upstream winds every face of a solid outward except the \
+                 extrusion base, so this is either a new upstream defect or a \
+                 broken measure"
+            );
+        }
+
+        assert_eq!(
+            inward_faces(&mesh),
+            0,
+            "{key}: the port must wind every face of a solid outward"
+        );
+    }
+
+    assert!(checked > 0, "the solid extrusion case was not checked");
+}
+
+/// Faces whose normal points back towards the middle of the mesh — the same
+/// measure `upstream_measure.py` records, so the two counts are comparable.
+fn inward_faces(mesh: &Explicit) -> usize {
+    let points = mesh.points();
+    let centroid = points
+        .iter()
+        .fold(Vec3::zeros(), |sum, p| sum + p.coords)
+        / points.len() as Real;
+
+    let faces: Vec<Vec<u32>> = match mesh {
+        Explicit::TriangleSet(m) => m.indices.iter().map(|f| f.to_vec()).collect(),
+        Explicit::QuadSet(m) => m.indices.iter().map(|f| f.to_vec()).collect(),
+        Explicit::FaceSet(m) => m.indices.clone(),
+        _ => return 0,
+    };
+
+    faces
+        .iter()
+        .filter(|face| face.len() >= 3)
+        .filter(|face| {
+            let corner = |i: usize| points[face[i] as usize].coords;
+            let normal = (corner(1) - corner(0)).cross(&(corner(2) - corner(0)));
+            if normal.norm() < 1e-9 {
+                return false; // degenerate: counted separately, and not wound either way
+            }
+            let centre = face
+                .iter()
+                .fold(Vec3::zeros(), |sum, i| sum + points[*i as usize].coords)
+                / face.len() as Real;
+            normal.dot(&(centre - centroid)) < 0.0
+        })
+        .count()
 }
 
 /// The other side of that coin: where the port follows upstream's own code

@@ -30,14 +30,16 @@ use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use crate::math::{Point2, Point3, Real, Vec2};
-use crate::scenegraph::curve::Curve2DRef;
+use crate::scenegraph::curve::{
+    BezierCurve, BezierPatch, Curve2DRef, Curve3D, NurbsCurve, NurbsPatch, ParametricCurve,
+};
 use crate::scenegraph::geometry::{Geometry, GeometryVisitor};
 use crate::scenegraph::mesh::{
     ExplicitModel, FaceSet, Group, Index, Index3, Index4, PointSet, Polyline, QuadSet, TriangleSet,
 };
 use crate::scenegraph::primitive::{
-    Box3, Cone, Cylinder, Disc, ElevationGrid, Frustum, Paraboloid, Revolution, Sphere, Swung,
-    MIN_SLICES, MIN_STACKS,
+    Box3, Cone, Cylinder, Disc, ElevationGrid, Extrusion, Frustum, Paraboloid, Revolution, Sphere,
+    Swung, MIN_SLICES, MIN_STACKS,
 };
 use crate::scenegraph::transform::{Transform, Transformed};
 
@@ -246,12 +248,15 @@ impl Discretizer {
             Geometry::Revolution(g) => self.revolution(g),
             Geometry::Swung(g) => self.swung(g),
             Geometry::ElevationGrid(g) => self.elevation_grid(g),
+            Geometry::BezierCurve(g) => self.bezier_curve(g),
+            Geometry::NurbsCurve(g) => self.nurbs_curve(g),
+            Geometry::BezierPatch(g) => self.bezier_patch(g),
+            Geometry::NurbsPatch(g) => self.nurbs_patch(g),
+            Geometry::Extrusion(g) => self.extrusion(g),
             Geometry::Group(g) => self.group(g),
             Geometry::Transformed(t) => self.transformed(t),
-            explicit if explicit.is_explicit() => {
-                Ok(Explicit::from_geometry(explicit).expect("is_explicit"))
-            }
-            unported => Err(unported.unsupported()),
+            explicit => Ok(Explicit::from_geometry(explicit)
+                .expect("every remaining variant is an explicit model")),
         }
     }
 
@@ -704,7 +709,7 @@ impl Discretizer {
     /// `process(Revolution*)`.
     fn revolution(&mut self, revolution: &Revolution) -> Result<Explicit> {
         revolution.is_valid(self.ctx.curve_samples)?;
-        let profile = revolution.profile.sample(self.ctx.curve_samples)?;
+        let profile = revolution.profile.discretize(self.ctx.curve_samples)?;
         let slices = self.slices(revolution.slices) as usize;
         let solid = profile_closes_a_volume(&profile);
         let (sections, angles) = full_turn(&profile, slices);
@@ -714,16 +719,18 @@ impl Discretizer {
     /// `process(Swung*)`.
     ///
     /// Upstream routes every swung surface through `ProfileInterpolation`,
-    /// which fits a NURBS of `Swung::degree` across the profiles. Degree 1 —
-    /// piecewise-linear blending — is translated here; higher degrees need the
-    /// spline machinery of Phase C (#19) and are reported as unsupported
-    /// rather than approximated, because a silently-linear blend of what was
-    /// asked to be a cubic is a wrong surface that still looks plausible.
+    /// which *fits* a NURBS of `Swung::degree` through the profiles — a global
+    /// interpolation problem, not an evaluation, so the spline evaluators of
+    /// Phase C (#19) do not supply it. Degree 1 — piecewise-linear blending —
+    /// is translated here; higher degrees are reported as unsupported rather
+    /// than approximated, because a silently-linear blend of what was asked to
+    /// be a cubic is a wrong surface that still looks plausible.
     fn swung(&mut self, swung: &Swung) -> Result<Explicit> {
         swung.is_valid(self.ctx.curve_samples)?;
         if swung.degree > Swung::MAX_PORTED_DEGREE && swung.profiles.len() > 1 {
             return Err(Error::unsupported(format!(
-                "Swung interpolation of degree {} needs the NURBS interpolation of Phase C (#19); \
+                "Swung interpolation of degree {} needs upstream's ProfileInterpolation, \
+                 which is not ported; \
                  degree 1 is available today",
                 swung.degree
             )));
@@ -950,6 +957,297 @@ impl Discretizer {
         Ok(Explicit::TriangleSet(mesh))
     }
 
+    // --- Curves, patches and the generalized cylinder -----------------------
+
+    /// `process(BezierCurve*)`.
+    fn bezier_curve(&mut self, curve: &BezierCurve) -> Result<Explicit> {
+        let width = curve.width;
+        self.lineic(Curve3D::BezierCurve(curve.clone()), width)
+    }
+
+    /// `process(NurbsCurve*)`.
+    fn nurbs_curve(&mut self, curve: &NurbsCurve) -> Result<Explicit> {
+        let width = curve.width;
+        self.lineic(Curve3D::NurbsCurve(curve.clone()), width)
+    }
+
+    /// Both curve cases: the polyline through `stride + 1` samples, ending on
+    /// the last knot exactly.
+    fn lineic(&mut self, curve: Curve3D, width: u32) -> Result<Explicit> {
+        let mut polyline = Polyline::new(curve.discretize(self.ctx.curve_samples)?);
+        polyline.width = width;
+        Ok(Explicit::Polyline(polyline))
+    }
+
+    /// `process(BezierPatch*)`.
+    fn bezier_patch(&mut self, patch: &BezierPatch) -> Result<Explicit> {
+        patch.is_valid()?;
+        let (u_samples, v_samples) = self.patch_samples(patch.u_stride, patch.v_stride);
+        self.patch_mesh(u_samples, v_samples, patch.ccw, |u, v| patch.eval(u, v))
+    }
+
+    /// `process(NurbsPatch*)`.
+    ///
+    /// Upstream samples the patch across its own knot range rather than
+    /// `[0, 1]`; the closure maps the unit square onto it so the two patch
+    /// cases share one meshing routine.
+    fn nurbs_patch(&mut self, patch: &NurbsPatch) -> Result<Explicit> {
+        patch.is_valid()?;
+        let (u_samples, v_samples) = self.patch_samples(patch.u_stride, patch.v_stride);
+        let (u_first, u_last) = (patch.first_u_knot(), patch.last_u_knot());
+        let (v_first, v_last) = (patch.first_v_knot(), patch.last_v_knot());
+        self.patch_mesh(u_samples, v_samples, patch.ccw, |u, v| {
+            patch.eval(
+                u_first + (u_last - u_first) * u,
+                v_first + (v_last - v_first) * v,
+            )
+        })
+    }
+
+    /// The shared patch meshing: a `u_samples × v_samples` lattice of quads,
+    /// point order u-major with `v` running fastest, as upstream emits it.
+    fn patch_mesh<F>(
+        &mut self,
+        u_samples: usize,
+        v_samples: usize,
+        ccw: bool,
+        eval: F,
+    ) -> Result<Explicit>
+    where
+        F: Fn(Real, Real) -> Result<Point3>,
+    {
+        let mut points = Vec::with_capacity(u_samples * v_samples);
+        let mut indices: Vec<Index4> = Vec::with_capacity((u_samples - 1) * (v_samples - 1));
+        for i in 0..u_samples {
+            let u = i as Real / (u_samples - 1) as Real;
+            for j in 0..v_samples {
+                let v = j as Real / (v_samples - 1) as Real;
+                points.push(eval(u, v)?);
+                if i + 1 < u_samples && j + 1 < v_samples {
+                    let cur = (i * v_samples + j) as u32;
+                    let stride = v_samples as u32;
+                    indices.push([cur, cur + 1, cur + stride + 1, cur + stride]);
+                }
+            }
+        }
+
+        let tex_coords = self
+            .compute_tex_coord
+            .then(|| grid_tex_coords(&points, u_samples, v_samples));
+
+        let mut mesh = QuadSet::new(points, indices);
+        mesh.model.ccw = ccw;
+        mesh.model.solid = false;
+        // Upstream gives a patch a degenerate skeleton — two copies of the
+        // origin — because a surface has no axis to speak of.
+        mesh.model.skeleton = Some(Arc::new(Polyline::new(vec![
+            Point3::origin(),
+            Point3::origin(),
+        ])));
+        mesh.model.tex_coords = tex_coords.map(Arc::new);
+        Ok(Explicit::QuadSet(mesh))
+    }
+
+    /// `process(Extrusion*)` — the generalized cylinder.
+    ///
+    /// The axis is sampled, a frame chain is carried along it, and a copy of
+    /// the cross-section is placed in each frame and stitched to the next.
+    ///
+    /// # The frames are rotation-minimising, unlike upstream's
+    ///
+    /// Upstream's `getNextFrameAt` re-derives each frame from the *previous
+    /// binormal* crossed with the new tangent. That is the projection method:
+    /// its per-step error in the twist is second order in the step, so a sweep
+    /// along a curve with torsion — a helix, a tendril, a drooping stem —
+    /// accumulates a visible rotation of the cross-section that gets worse as
+    /// the axis is sampled more coarsely.
+    ///
+    /// The port carries the frames by the double-reflection method of Wang,
+    /// Jüttler, Zheng and Liu (2008), [`Frame::propagate`], whose error is
+    /// fourth order. The two agree exactly on a straight axis — no rotation to
+    /// minimise — and converge on any other, so this is a divergence in the
+    /// vertex *phase* around each ring, not in the surface being swept. The
+    /// differential harness pins both halves of that claim: identical meshes on
+    /// a straight axis, and a bounded difference on a helix.
+    fn extrusion(&mut self, extrusion: &Extrusion) -> Result<Explicit> {
+        let samples = self.ctx.curve_samples;
+        extrusion.is_valid(samples)?;
+
+        // A closed cross-section repeats its first point. Drop the duplicate
+        // and stitch the ring round instead, so the seam has no double vertex.
+        let mut section = extrusion.cross_section.discretize(samples)?;
+        let closed = section.len() > 2
+            && (section[section.len() - 1] - section[0]).norm() <= crate::math::EPSILON;
+        if closed {
+            section.pop();
+        }
+        let ring_size = section.len();
+        if ring_size < 2 {
+            return Err(Error::degenerate(
+                "an extrusion cross-section needs at least 2 distinct points",
+            ));
+        }
+
+        // One rotation-minimising frame per axis sample.
+        let axis = extrusion.axis.as_ref();
+        let parameters = axis.parameters(samples);
+        let rings = parameters.len();
+        let mut frame = axis.initial_frame()?;
+        let mut frames = Vec::with_capacity(rings);
+        frames.push(frame);
+        for u in parameters.iter().skip(1) {
+            let position = axis.eval(*u)?;
+            let heading = axis.tangent(*u)?;
+            frame = frame.propagate(position, heading).ok_or_else(|| {
+                Error::degenerate(format!(
+                    "the extrusion axis has no tangent at u = {u}, so the sweep cannot be framed"
+                ))
+            })?;
+            frames.push(frame);
+        }
+
+        let (u_min, u_max) = (extrusion.u_min(), extrusion.u_max());
+        let section_lengths = arc_length_parameters(&section_with_seam(&section, closed));
+        let axis_lengths = cumulative_fractions(&frames);
+
+        let mut points = Vec::with_capacity(rings * ring_size);
+        let mut indices: Vec<Index4> = Vec::with_capacity((rings - 1) * ring_size);
+        // A closed ring's texture seam needs the first vertex twice — once at
+        // u = 0 and once at u = 1 — so texture coordinates are indexed
+        // separately, exactly as upstream does it.
+        let tex_ring = ring_size + usize::from(closed);
+        let mut tex_coords = Vec::with_capacity(rings * tex_ring);
+        let mut tex_indices: Vec<Index4> = Vec::with_capacity((rings - 1) * ring_size);
+
+        for (ring, frame) in frames.iter().enumerate() {
+            let along = ring as Real / (rings - 1) as Real;
+            let (scale, twist) = extrusion.profile_at(u_min + (u_max - u_min) * along);
+            let (sin, cos) = twist.sin_cos();
+            let base = (ring * ring_size) as u32;
+            let tex_base = (ring * tex_ring) as u32;
+
+            for (i, p) in section.iter().enumerate() {
+                // Upstream composes the profile as `scale * orientation`, so
+                // the twist is applied first; its rotation matrix is
+                // `Matrix2(c, s, -s, c)`, which turns the cross-section
+                // clockwise for a positive angle.
+                let (x, y) = (p.x * cos + p.y * sin, -p.x * sin + p.y * cos);
+                let (x, y) = (x * scale.x, y * scale.y);
+                points.push(frame.position + frame.left * x + frame.up * y);
+
+                if self.compute_tex_coord {
+                    tex_coords.push(Vec2::new(section_lengths[i], axis_lengths[ring]));
+                }
+                if ring + 1 == rings {
+                    continue;
+                }
+                let (cur, ahead) = (base + i as u32, base + ((i + 1) % ring_size) as u32);
+                if i + 1 < ring_size || closed {
+                    indices.push([
+                        cur,
+                        ahead,
+                        ahead + ring_size as u32,
+                        cur + ring_size as u32,
+                    ]);
+                    let (t_cur, t_ahead) = (tex_base + i as u32, tex_base + i as u32 + 1);
+                    tex_indices.push([
+                        t_cur,
+                        t_ahead,
+                        t_ahead + tex_ring as u32,
+                        t_cur + tex_ring as u32,
+                    ]);
+                }
+            }
+            if closed && self.compute_tex_coord {
+                // The seam vertex again, at the far end of the texture.
+                tex_coords.push(Vec2::new(1.0, axis_lengths[ring]));
+            }
+        }
+
+        let mut mesh = if extrusion.solid {
+            // Cap both ends. Upstream triangulates the two rings as fans and
+            // puts them before the swept quads, which makes the result a
+            // FaceSet rather than a QuadSet.
+            //
+            // # The first cap is reversed, unlike upstream
+            //
+            // Upstream fans both rings in the same order —
+            // `range<Index>(nbPoints, 0, 1)` and the same from the last ring —
+            // and a cross-section wound counter-clockwise in the frame's
+            // `(left, up)` plane fans to a normal along `+heading`. At the far
+            // end that points out of the solid; at the near end it points
+            // straight into it, so upstream's every solid `Extrusion` has an
+            // inverted base. Nothing upstream notices: `VolComputer` sums the
+            // *absolute* tetrahedra about the centroid, so a flipped face is
+            // invisible to it, and the face count and area are unchanged.
+            //
+            // It is not invisible to a renderer, to a signed volume, or to any
+            // caller that trusts a `solid` mesh's normals. The port reverses
+            // the near cap. The differential harness records the inward-facing
+            // face count on both sides, so this is asserted as a divergence
+            // rather than assumed.
+            let mut faces: Vec<Index> = Vec::with_capacity(indices.len() + 2 * (ring_size - 2));
+            let mut tex_faces: Vec<Index> = Vec::with_capacity(faces.capacity());
+            let last_ring = ((rings - 1) * ring_size) as u32;
+            let last_tex_ring = ((rings - 1) * tex_ring) as u32;
+            for (base, tex_base, reversed) in
+                [(0, 0, true), (last_ring, last_tex_ring, false)]
+            {
+                for i in 1..ring_size as u32 - 1 {
+                    let (a, b) = if reversed { (i + 1, i) } else { (i, i + 1) };
+                    faces.push(vec![base, base + a, base + b]);
+                    tex_faces.push(vec![tex_base, tex_base + a, tex_base + b]);
+                }
+            }
+            faces.extend(indices.iter().map(|quad| quad.to_vec()));
+            tex_faces.extend(tex_indices.iter().map(|quad| quad.to_vec()));
+
+            let mut mesh = FaceSet::new(points, faces);
+            if self.compute_tex_coord && closed {
+                mesh.tex_coord_indices = Some(tex_faces);
+            }
+            mesh.model.solid = true;
+            Explicit::FaceSet(mesh)
+        } else {
+            let mut mesh = QuadSet::new(points, indices);
+            if self.compute_tex_coord && closed {
+                mesh.tex_coord_indices = Some(tex_indices);
+            }
+            mesh.model.solid = false;
+            Explicit::QuadSet(mesh)
+        };
+
+        {
+            let model = match &mut mesh {
+                Explicit::FaceSet(m) => &mut m.model,
+                Explicit::QuadSet(m) => &mut m.model,
+                _ => unreachable!("an extrusion meshes to a face set or a quad set"),
+            };
+            model.ccw = extrusion.ccw;
+            // The axis is the mesh's skeleton, which is what a later
+            // measurement of the swept volume reads.
+            model.skeleton = Some(Arc::new(Polyline::new(
+                frames.iter().map(|f| f.position).collect(),
+            )));
+            if self.compute_tex_coord {
+                model.tex_coords = Some(Arc::new(tex_coords));
+            }
+        }
+        Ok(mesh)
+    }
+
+    /// A patch's sample counts. Upstream's patch `UStride` counts *samples*
+    /// where its curve `Stride` counts *segments*; both names are kept as
+    /// upstream uses them, and a patch that leaves its strides unset takes
+    /// [`DiscretizeCtx::curve_samples`] as its sample count — 30 either way, so
+    /// a default patch meshes to upstream's.
+    fn patch_samples(&self, u: Option<u32>, v: Option<u32>) -> (usize, usize) {
+        (
+            u.unwrap_or(self.ctx.curve_samples).max(2) as usize,
+            v.unwrap_or(self.ctx.curve_samples).max(2) as usize,
+        )
+    }
+
     // --- Density resolution ------------------------------------------------
 
     fn slices(&self, own: Option<u8>) -> u8 {
@@ -987,7 +1285,7 @@ impl Discretizer {
         profiles
             .iter()
             .map(|profile| {
-                let points = profile.sample(self.ctx.curve_samples)?;
+                let points = profile.discretize(self.ctx.curve_samples)?;
                 Ok(resample_polyline(&points, stride as usize + 1))
             })
             .collect()
@@ -1031,6 +1329,59 @@ fn profile_closes_a_volume(profile: &[Point2]) -> bool {
         }
         _ => false,
     }
+}
+
+/// A swept cross-section with its seam point restored, so the arc length
+/// around a closed ring includes the segment that closes it.
+fn section_with_seam(section: &[Point2], closed: bool) -> Vec<Point2> {
+    let mut points = section.to_vec();
+    if closed {
+        points.push(section[0]);
+    }
+    points
+}
+
+/// Cumulative distance along a frame chain, normalised to `[0, 1]` — the v of
+/// a swept UV, so a texture runs at a constant rate along the axis rather than
+/// along its parameter.
+fn cumulative_fractions(frames: &[crate::math::Frame]) -> Vec<Real> {
+    let mut lengths = Vec::with_capacity(frames.len());
+    let mut total = 0.0;
+    lengths.push(0.0);
+    for pair in frames.windows(2) {
+        total += (pair[1].position - pair[0].position).norm();
+        lengths.push(total);
+    }
+    if total <= crate::math::EPSILON {
+        return vec![0.0; frames.len()];
+    }
+    lengths.iter().map(|l| l / total).collect()
+}
+
+/// `Discretizer::gridTexCoord` — per-row and per-column normalised arc length
+/// over a sampled lattice, which is what keeps a texture even across a patch
+/// whose samples are not evenly spaced in space.
+fn grid_tex_coords(points: &[Point3], u_samples: usize, v_samples: usize) -> Vec<Vec2> {
+    let mut tex = vec![Vec2::zeros(); points.len()];
+    let at = |i: usize, j: usize| points[i * v_samples + j];
+
+    for i in 0..u_samples {
+        let total: Real = (1..v_samples).map(|j| (at(i, j) - at(i, j - 1)).norm()).sum();
+        let mut walked = 0.0;
+        for j in 1..v_samples {
+            walked += (at(i, j) - at(i, j - 1)).norm();
+            tex[i * v_samples + j].x = if total > 0.0 { walked / total } else { 0.0 };
+        }
+    }
+    for j in 0..v_samples {
+        let total: Real = (1..u_samples).map(|i| (at(i, j) - at(i - 1, j)).norm()).sum();
+        let mut walked = 0.0;
+        for i in 1..u_samples {
+            walked += (at(i, j) - at(i - 1, j)).norm();
+            tex[i * v_samples + j].y = if total > 0.0 { walked / total } else { 0.0 };
+        }
+    }
+    tex
 }
 
 /// Cumulative arc length normalised to `[0, 1]`, the v of a cylindrical UV.
@@ -1549,7 +1900,7 @@ mod tests {
         );
         let error = discretize(&Geometry::from(swung)).unwrap_err();
         assert!(matches!(error, Error::Unsupported(_)));
-        assert!(format!("{error}").contains("#19"));
+        assert!(format!("{error}").contains("ProfileInterpolation"));
     }
 
     #[test]
@@ -1625,9 +1976,19 @@ mod tests {
     }
 
     #[test]
-    fn a_phase_c_primitive_is_unsupported() {
-        let extrusion = Geometry::Extrusion(crate::scenegraph::primitive::Extrusion);
-        assert!(matches!(discretize(&extrusion), Err(Error::Unsupported(_))));
+    fn a_degenerate_extrusion_is_rejected_rather_than_meshed() {
+        let axis = Curve3D::from(Polyline::new(vec![Point3::origin(), Point3::origin()]));
+        let extrusion = Geometry::from(Extrusion::new(
+            axis.into_ref(),
+            crate::scenegraph::curve::Curve2D::from(
+                crate::scenegraph::curve::Polyline2D::circle(1.0, 6),
+            )
+            .into_ref(),
+        ));
+        assert!(matches!(
+            discretize(&extrusion),
+            Err(Error::DegenerateGeometry(_))
+        ));
     }
 
     #[test]

@@ -362,8 +362,26 @@ mod tests {
     }
 
     #[test]
-    fn computer_reports_unported_primitives() {
-        let tree = Geometry::Extrusion(crate::scenegraph::primitive::Extrusion).into_ref();
+    fn computer_reports_a_geometry_it_cannot_discretise() {
+        // A `Swung` of degree above 1 needs upstream's `ProfileInterpolation`,
+        // which is not ported; the computer propagates that rather than
+        // reporting an empty box.
+        let profile = crate::scenegraph::curve::Curve2D::from(
+            crate::scenegraph::curve::Polyline2D::new(vec![
+                crate::math::Point2::new(1.0, 0.0),
+                crate::math::Point2::new(1.0, 1.0),
+            ]),
+        )
+        .into_ref();
+        let swung = crate::scenegraph::primitive::Swung::new(
+            vec![profile.clone(), profile],
+            vec![0.0, 1.0],
+            8,
+            true,
+            3,
+            0,
+        );
+        let tree = Geometry::from(swung).into_ref();
         assert!(matches!(bounding_box(&tree), Err(Error::Unsupported(_))));
     }
 

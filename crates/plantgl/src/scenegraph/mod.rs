@@ -10,6 +10,7 @@
 
 pub mod appearance;
 pub mod curve;
+pub mod function;
 pub mod geometry;
 pub mod mesh;
 pub mod primitive;
@@ -21,9 +22,10 @@ pub use appearance::{
     Texture2DTransformation,
 };
 pub use curve::{
-    BezierCurve, BezierCurve2D, BezierPatch, Curve2D, Curve2DRef, NurbsCurve, NurbsCurve2D,
-    NurbsPatch, Polyline2D,
+    BezierCurve, BezierCurve2D, BezierPatch, CtrlPointMatrix, Curve2D, Curve2DRef, Curve3D,
+    Curve3DRef, CurvePoint, NurbsCurve, NurbsCurve2D, NurbsPatch, ParametricCurve, Polyline2D,
 };
+pub use function::QuantisedFunction;
 pub use geometry::{Geometry, GeometryRef, GeometryVisitor};
 pub use mesh::{
     ExplicitModel, FaceIndex, FaceSet, Group, Index, Index3, Index4, IndexedMesh, PointSet,

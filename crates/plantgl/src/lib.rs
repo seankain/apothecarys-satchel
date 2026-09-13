@@ -17,7 +17,7 @@
 //!
 //! # What is here today
 //!
-//! Phases A and B of the port:
+//! Phases A, B and C of the port:
 //!
 //! - **A** — the math layer, explicit (vertex-list) geometry, appearances,
 //!   scenes, transformations, transform accumulation and OBJ export.
@@ -26,9 +26,11 @@
 //!   [`algo::tessellate`] reduces those to triangles, [`algo::merge`] batches
 //!   them by appearance, and [`algo::measure`], [`algo::bbox`] and
 //!   [`algo::bsphere`] read them.
+//! - **C** — Bézier and NURBS curves and patches ([`scenegraph::curve`]) and
+//!   the generalized cylinder, [`Extrusion`], which sweeps a 2D cross-section
+//!   along a 3D axis under rotation-minimising frames.
 //!
-//! Curves, patches and `Extrusion` are Phase C: they remain stubbed variants of
-//! [`Geometry`] that visitors report as [`Error::Unsupported`]. See
+//! The turtle and the L-system driver are Phase D. See
 //! `docs/design/08-plantgl-port.md`.
 //!
 //! ```
@@ -46,6 +48,40 @@
 //!
 //! let triangles = tessellate::tessellate(&mesh).unwrap();
 //! assert_eq!(triangles.face_count(), 32);
+//! ```
+//!
+//! A stem: a circular cross-section swept along a curved axis, narrowing as it
+//! goes. This is the shape `Cylinder` cannot make.
+//!
+//! ```
+//! use plantgl::algo::{discretize, measure};
+//! use plantgl::math::Point3;
+//! use plantgl::scenegraph::mesh::Polyline;
+//! use plantgl::{Curve2D, Curve3D, Extrusion, Geometry, NurbsCurve2D, QuantisedFunction};
+//!
+//! // The axis leans over as it rises, the way a laden stem does.
+//! let axis = Curve3D::from(Polyline::new(vec![
+//!     Point3::new(0.0, 0.0, 0.0),
+//!     Point3::new(0.0, 0.05, 0.4),
+//!     Point3::new(0.0, 0.20, 0.8),
+//!     Point3::new(0.0, 0.45, 1.1),
+//! ]));
+//! // An exact circle, not an n-gon: the sweep decides its own facet count.
+//! let section = Curve2D::from(NurbsCurve2D::circle(0.04).with_stride(12));
+//!
+//! let stem = Extrusion::with_radius_profile(
+//!     axis.into_ref(),
+//!     section.into_ref(),
+//!     &QuantisedFunction::ramp(1.0, 0.35), // thick at the base, thin at the tip
+//!     8,
+//! )
+//! .with_solid(true);
+//!
+//! let mesh = discretize::discretize(&Geometry::from(stem)).unwrap();
+//! assert!(mesh.is_solid());
+//! // A tapering tube of mean radius ~0.027 over an axis ~1.2 long.
+//! let volume = measure::volume(&mesh).unwrap();
+//! assert!((0.001..0.004).contains(&volume), "{volume}");
 //! ```
 //!
 //! ```
@@ -84,7 +120,9 @@ pub use algo::{
 pub use error::{Error, Result};
 pub use math::Frame;
 pub use scenegraph::{
-    Appearance, AppearanceRef, Box3, Color3, Color4, Cone, Curve2D, Cylinder, Disc, ElevationGrid,
-    Frustum, Geometry, GeometryRef, GeometryVisitor, Group, Material, Paraboloid, Polyline2D,
-    Revolution, Scene, Shape, Sphere, Swung, TriangleSet,
+    Appearance, AppearanceRef, BezierCurve, BezierCurve2D, BezierPatch, Box3, Color3, Color4, Cone,
+    CtrlPointMatrix, Curve2D, Curve3D, Cylinder, Disc, ElevationGrid, Extrusion, Frustum, Geometry,
+    GeometryRef, GeometryVisitor, Group, Material, NurbsCurve, NurbsCurve2D, NurbsPatch,
+    Paraboloid, ParametricCurve, Polyline2D, QuantisedFunction, Revolution, Scene, Shape, Sphere,
+    Swung, TriangleSet,
 };

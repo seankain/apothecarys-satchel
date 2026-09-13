@@ -318,7 +318,12 @@ fn as_face_mesh(geometry: &Geometry) -> Result<Option<FaceSet>> {
         },
         Geometry::FaceSet(m) => m.clone(),
         Geometry::PointSet(_) | Geometry::Polyline(_) => return Ok(None),
-        other => return Err(other.unsupported()),
+        parametric => {
+            return Err(Error::unsupported(format!(
+                "OBJ has no parametric geometry: discretise the {} first",
+                parametric.type_name()
+            )))
+        }
     };
     Ok(Some(mesh))
 }

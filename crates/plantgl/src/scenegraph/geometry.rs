@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::scenegraph::curve::{BezierCurve, BezierPatch, NurbsCurve, NurbsPatch};
 use crate::scenegraph::mesh::{FaceSet, Group, PointSet, Polyline, QuadSet, TriangleSet};
 use crate::scenegraph::primitive::{
@@ -45,12 +45,6 @@ use crate::scenegraph::transform::Transformed;
 pub type GeometryRef = Arc<Geometry>;
 
 /// Every geometry this crate can carry.
-///
-/// Variants whose primitive is not yet ported hold a placeholder — see
-/// [`crate::scenegraph::primitive`] and [`crate::scenegraph::curve`]. They
-/// exist now so the enum's shape does not churn when later phases fill them
-/// in, and every visitor already handles them by returning
-/// [`Error::Unsupported`].
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Geometry {
@@ -66,12 +60,11 @@ pub enum Geometry {
     Swung(Swung),
     ElevationGrid(ElevationGrid),
 
-    // Curves and patches — Phase C (#19).
+    // Curves, patches and the generalized cylinder — ported in Phase C (#19).
     BezierCurve(BezierCurve),
     NurbsCurve(NurbsCurve),
     BezierPatch(BezierPatch),
     NurbsPatch(NurbsPatch),
-    /// The generalized cylinder — Phase C (#19).
     Extrusion(Extrusion),
 
     // Explicit models — ported.
@@ -120,20 +113,6 @@ impl Geometry {
         }
     }
 
-    /// Whether this variant's primitive has been translated yet. `false`
-    /// means the variant is one of the Phase C placeholders — the curves,
-    /// the patches and the extrusion.
-    pub fn is_ported(&self) -> bool {
-        !matches!(
-            self,
-            Geometry::BezierCurve(_)
-                | Geometry::NurbsCurve(_)
-                | Geometry::BezierPatch(_)
-                | Geometry::NurbsPatch(_)
-                | Geometry::Extrusion(_)
-        )
-    }
-
     /// Whether this geometry already carries explicit vertices, so no
     /// discretisation is needed — upstream's `ExplicitModel` subtree.
     pub fn is_explicit(&self) -> bool {
@@ -145,11 +124,6 @@ impl Geometry {
                 | Geometry::PointSet(_)
                 | Geometry::Polyline(_)
         )
-    }
-
-    /// The error a visitor should return for a not-yet-ported variant.
-    pub fn unsupported(&self) -> Error {
-        Error::unsupported(format!("{} is not ported yet", self.type_name()))
     }
 }
 
@@ -185,6 +159,11 @@ pub trait GeometryVisitor {
 }
 
 impl_from_geometry! {
+    BezierCurve => BezierCurve,
+    NurbsCurve => NurbsCurve,
+    BezierPatch => BezierPatch,
+    NurbsPatch => NurbsPatch,
+    Extrusion => Extrusion,
     Box3 => Box,
     Sphere => Sphere,
     Cone => Cone,
@@ -269,44 +248,31 @@ mod tests {
         impl GeometryVisitor for Failing {
             type Output = ();
             fn visit(&mut self, geometry: &Geometry) -> Result<()> {
-                Err(geometry.unsupported())
+                Err(crate::error::Error::unsupported(geometry.type_name()))
             }
         }
         let tree = Geometry::Group(Group::new(vec![triangle(0.0)]));
         assert!(matches!(
             Failing.walk(&tree),
-            Err(Error::Unsupported(_))
+            Err(crate::error::Error::Unsupported(_))
         ));
     }
 
     #[test]
-    fn phase_c_variants_report_themselves_as_unported() {
-        let stub = Geometry::Extrusion(crate::scenegraph::primitive::Extrusion);
-        assert!(!stub.is_ported());
-        assert!(!stub.is_explicit());
-        assert_eq!(stub.type_name(), "Extrusion");
-        assert!(matches!(stub.unsupported(), Error::Unsupported(_)));
-    }
-
-    #[test]
-    fn phase_b_primitives_are_ported_but_not_explicit() {
+    fn parametric_geometry_is_not_explicit() {
         let sphere = Geometry::from(Sphere::default());
-        assert!(sphere.is_ported());
         assert!(!sphere.is_explicit());
         assert_eq!(sphere.type_name(), "Sphere");
     }
 
     #[test]
-    fn explicit_models_are_ported_and_explicit() {
-        let mesh = triangle(0.0);
-        assert!(mesh.is_ported());
-        assert!(mesh.is_explicit());
+    fn explicit_models_are_explicit() {
+        assert!(triangle(0.0).is_explicit());
     }
 
     #[test]
-    fn groups_are_ported_but_not_explicit() {
+    fn groups_are_not_explicit() {
         let group = Geometry::Group(Group::new(vec![triangle(0.0)]));
-        assert!(group.is_ported());
         assert!(!group.is_explicit());
     }
 }

@@ -47,16 +47,22 @@ for the full plan.
 | Phase | Contents | State |
 |---|---|---|
 | A | Crate, licensing, math + frames, explicit meshes, scene graph, transforms, OBJ export | **done** |
-| B | Parametric primitives, discretizer, tessellator, measurement, bounding volumes, merge | **this crate today** |
-| C | Bézier/NURBS curves and patches, `Extrusion` | not started |
-| D | Turtle, generalized cylinders, guides, tropism | not started |
+| B | Parametric primitives, discretizer, tessellator, measurement, bounding volumes, merge | **done** |
+| C | Bézier/NURBS curves and patches, `Extrusion` | **this crate today** |
+| D | Turtle, guides, tropism, the L-system driver | not started |
 
-Variants of `Geometry` whose primitives are not yet ported — the curves, the
-patches and `Extrusion`, all Phase C — are present as stubs so the enum shape
-is stable; visitors report them as `Error::Unsupported`. `Swung` is ported, but
-its cross-profile interpolation is available at degree 1 only; higher degrees
-need the NURBS interpolation Phase C brings and report `Error::Unsupported`
-rather than silently blending linearly.
+Every `Geometry` variant now discretises. `Swung` is the one partial exception:
+its cross-profile interpolation is available at degree 1 only, because upstream
+*fits* a NURBS through the profiles (`ProfileInterpolation`) rather than
+evaluating one, and that fitting routine is not ported; higher degrees report
+`Error::Unsupported` rather than silently blending linearly.
+
+`Extrusion` sweeps a 2D cross-section along a 3D axis under
+**rotation-minimising frames**, carried by the double-reflection method of Wang
+et al. (2008) rather than upstream's projection method — see the divergences
+below. `NurbsCurve2D::circle` is the exact rational circle a cross-section
+usually wants; `Polyline2D::circle` is the inscribed *n*-gon the turtle uses by
+default.
 
 ## Differential testing
 
@@ -67,10 +73,27 @@ PlantGL and writes `tests/reference.json`; `tests/differential.rs` compares
 against it and needs no Python, so the gate runs on every `cargo test`. See
 `tools/differential/README.md`.
 
-It has already found two defects in upstream's own analytic formulas — the
-`Disc` surface returns the circumference, and the solid `Frustum` surface adds
-its end caps as `π(r + q)` rather than `π(r² + q²)` — both of which the port
-measures correctly and does not reproduce.
+It has already found five defects in upstream, each pinned by a test that fails
+if a rebase fixes it:
+
+- `SurfComputer::process(Disc*)` returns the **circumference**, not the area.
+- `SurfComputer::process(Frustum*)`'s solid branch adds its end caps as
+  `π(r + q)` rather than `π(r² + q²)`.
+- `BezierCurve::getTangentAt` differences the stored control points and calls
+  `project()` on the result, dividing by a difference of *weights* instead of
+  applying the quotient rule — so a **rational** Bézier's tangent is not a
+  tangent at all. (`NurbsCurve::getTangentAt` goes through `deriveAt` and is
+  correct.)
+- The same function special-cases both **end points** and gets both wrong: a
+  normalised `P1 - P0` at `u = 0`, and `P[n] - P[n-1]` without the factor `n` at
+  `u = 1`, so upstream's tangent field is discontinuous at both ends of every
+  Bézier curve.
+- `Discretizer::process(Extrusion*)` fans **both** end caps in the same vertex
+  order, so every solid `Extrusion` it produces has a base that faces into the
+  solid. Upstream cannot see it: `VolComputer` sums *absolute* tetrahedra about
+  the centroid, and the face count and area are unchanged either way.
+
+The port computes all five correctly and does not reproduce any of them.
 
 ## Design notes
 
@@ -83,4 +106,15 @@ The port deliberately diverges from upstream where Rust does it better:
 - `DeepCopier` → `#[derive(Clone)]`.
 - Warn-and-continue error handling → `Result` + `thiserror`.
 - `real_t` stays `f32`, matching upstream's default and the engine's vertex
-  format.
+  format — **except** inside spline evaluation, where knots, basis functions and
+  de Boor accumulations run in `f64` and only the finished point is narrowed.
+  That is the one place `f32`'s margin is genuinely thin: the basis functions
+  divide by differences of knots.
+- Swept frames are rotation-minimising by double reflection (fourth-order error)
+  where upstream re-derives each frame from the previous binormal (second
+  order). The two agree exactly on a straight axis and differ by a rotation of
+  each ring on a curved one, which `tests/differential.rs` bounds rather than
+  excuses.
+- Upstream's two patch classes read the same control matrix transposed relative
+  to each other — `BezierPatch` as `[v][u]`, `NurbsPatch` as `[u][v]`. The port
+  uses `[u][v]` for both.

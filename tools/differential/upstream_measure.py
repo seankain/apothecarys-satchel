@@ -44,6 +44,53 @@ def profile_polyline(points: list[tuple[float, float]]) -> Any:
     return pgl.Polyline2D(pgl.Point2Array([pgl.Vector2(x, y) for x, y in points]))
 
 
+def helix_axis(turns: float, segments: int, a: float = 1.0, b: float = 0.35) -> Any:
+    """A helix as an explicit polyline — the case a naive Frenet frame twists."""
+    points = []
+    for i in range(segments + 1):
+        t = turns * 2.0 * math.pi * i / segments
+        points.append(pgl.Vector3(a * math.cos(t), a * math.sin(t), b * t))
+    return pgl.Polyline(pgl.Point3Array(points))
+
+
+def straight_axis(height: float, segments: int) -> Any:
+    return pgl.Polyline(
+        pgl.Point3Array(
+            [pgl.Vector3(0, 0, height * i / segments) for i in range(segments + 1)]
+        )
+    )
+
+
+def patch_net(rows: list[list[tuple[float, float, float]]]) -> Any:
+    """A control net as `[u][v]`, the layout `crates/plantgl` uses.
+
+    Upstream's two patch classes disagree about this: `NurbsPatch::getPointAt`
+    reads `getAt(u, v)` while `BezierPatch::getPointAt` reads `getAt(v, u)`, so
+    the same `Point4Matrix` means transposed things to them. The port picks
+    `NurbsPatch`'s reading for both, and `bezier_net` below transposes on the
+    way into upstream so the two sides describe the same surface. That
+    transposition is itself part of what the harness checks: if upstream ever
+    made the two agree, the Bézier patch cases would stop matching.
+    """
+    return pgl.Point4Matrix(
+        [[pgl.Vector4(x, y, z, 1.0) for (x, y, z) in row] for row in rows]
+    )
+
+
+def bezier_net(rows: list[list[tuple[float, float, float]]]) -> Any:
+    transposed = [list(column) for column in zip(*rows)]
+    return patch_net(transposed)
+
+
+# A 4x4 control net with a bump in the middle, used by both patch cases.
+PATCH_ROWS = [
+    [(0.0, 0.0, 0.0), (0.0, 1.0, 0.8), (0.0, 2.0, -0.2), (0.0, 3.0, 0.0)],
+    [(1.0, 0.0, 0.5), (1.0, 1.0, 2.0), (1.0, 2.0, 1.0), (1.0, 3.0, -0.4)],
+    [(2.0, 0.0, -0.3), (2.0, 1.0, 0.9), (2.0, 2.0, 1.4), (2.0, 3.0, 0.2)],
+    [(3.0, 0.0, 0.0), (3.0, 1.0, -0.6), (3.0, 2.0, 0.3), (3.0, 3.0, 0.0)],
+]
+
+
 # Each entry builds one primitive at a given (slices, stacks). The names match
 # the `case` strings in `crates/plantgl/tests/differential.rs`; keep the two in
 # step.
@@ -92,7 +139,150 @@ CASES: dict[str, Callable[[int, int], Any]] = {
         0.5,
         2.0,
     ),
+    # --- Phase C (#19): patches and the generalized cylinder ----------------
+    #
+    # A patch's `UStride` counts samples where a curve's `Stride` counts
+    # segments, so `s` here is a point count and the mesh is (s-1)^2 quads.
+    "bezier_patch_bump": lambda s, t: pgl.BezierPatch(bezier_net(PATCH_ROWS), s, s),
+    "nurbs_patch_bump": lambda s, t: pgl.NurbsPatch(
+        patch_net(PATCH_ROWS), 3, 3, None, None, s, s
+    ),
+    # A straight axis is where the port's rotation-minimising frames and
+    # upstream's projection frames provably coincide, so these must match
+    # vertex for vertex.
+    "extrusion_straight": lambda s, t: pgl.Extrusion(
+        straight_axis(2.0, 8), pgl.Polyline2D.Circle(0.5, s)
+    ),
+    "extrusion_straight_solid": lambda s, t: pgl.Extrusion(
+        straight_axis(2.0, 8), pgl.Polyline2D.Circle(0.5, s), None, None, None, True
+    ),
+    # An open cross-section: no seam to stitch, one fewer quad per ring.
+    "extrusion_open_section": lambda s, t: pgl.Extrusion(
+        straight_axis(2.0, 6),
+        profile_polyline([(1.0, 0.0), (0.5, 0.8), (-0.5, 0.8), (-1.0, 0.0)]),
+    ),
+    # A tapering sweep, which exercises the scale list and its interpolation.
+    "extrusion_tapered": lambda s, t: pgl.Extrusion(
+        straight_axis(3.0, 8),
+        pgl.Polyline2D.Circle(1.0, s),
+        pgl.Point2Array([pgl.Vector2(1.0, 1.0), pgl.Vector2(0.25, 0.25)]),
+    ),
+    # A twisting sweep: `orientation` is applied in the cross-section plane,
+    # and upstream's rotation matrix turns it clockwise.
+    "extrusion_twisted": lambda s, t: pgl.Extrusion(
+        straight_axis(2.0, 8),
+        profile_polyline([(1.0, 0.0), (0.3, 0.6), (-1.0, 0.0), (0.3, -0.6), (1.0, 0.0)]),
+        None,
+        pgl.RealArray([0.0, math.pi / 3]),
+    ),
+    # The frame divergence, isolated: a helix has torsion, so this is the one
+    # case where the two frame chains do not agree. The Rust side compares it
+    # as a divergence with a derived bound rather than skipping it.
+    "extrusion_helix": lambda s, t: pgl.Extrusion(
+        helix_axis(2.0, 64), pgl.Polyline2D.Circle(0.15, s)
+    ),
 }
+
+
+# Curves are not meshes: a `Discretizer` reduces them to a `Polyline`, so there
+# is no area, volume or face count to compare. What there is instead is the
+# thing that matters — the sampled points, and the tangents at them.
+CURVE_CASES: dict[str, Callable[[], Any]] = {
+    "bezier_curve_cubic": lambda: pgl.BezierCurve(
+        pgl.Point4Array(
+            [
+                pgl.Vector4(0, 0, 0, 1),
+                pgl.Vector4(1, 4, -2, 1),
+                pgl.Vector4(3, -1, 2, 1),
+                pgl.Vector4(5, 2, 0, 1),
+            ]
+        )
+    ),
+    # Weighted control points: upstream's Bézier *point* is rational and
+    # correct, and its *tangent* is not (see `TANGENT_IS_COMPARABLE`).
+    "bezier_curve_rational": lambda: pgl.BezierCurve(
+        pgl.Point4Array(
+            [
+                pgl.Vector4(1, 0, 0, 1),
+                pgl.Vector4(1, 1, 0, 0.5),
+                pgl.Vector4(0, 1, 1, 2.0),
+                pgl.Vector4(-1, 0, 1, 1),
+            ]
+        )
+    ),
+    "nurbs_curve_cubic": lambda: pgl.NurbsCurve(
+        pgl.Point4Array(
+            [
+                pgl.Vector4(0, 0, 0, 1),
+                pgl.Vector4(1, 2, 0, 1),
+                pgl.Vector4(2, -1, 1, 1),
+                pgl.Vector4(3, 1, 2, 1),
+                pgl.Vector4(4, 0, 0, 1),
+                pgl.Vector4(5, 2, 1, 1),
+            ]
+        ),
+        3,
+    ),
+    # An explicit, non-uniform knot vector: the span search is what this checks.
+    "nurbs_curve_knots": lambda: pgl.NurbsCurve(
+        pgl.Point4Array(
+            [
+                pgl.Vector4(0, 0, 0, 1),
+                pgl.Vector4(1, 3, 0, 1),
+                pgl.Vector4(2, 0, 2, 1),
+                pgl.Vector4(4, 1, 0, 1),
+                pgl.Vector4(5, -1, 1, 1),
+            ]
+        ),
+        2,
+        pgl.RealArray([0.0, 0.0, 0.0, 0.3, 0.75, 1.0, 1.0, 1.0]),
+    ),
+    "bezier_curve_2d": lambda: pgl.BezierCurve2D(
+        pgl.Point3Array(
+            [
+                pgl.Vector3(0, 0, 1),
+                pgl.Vector3(1, 2, 1),
+                pgl.Vector3(3, -1, 1),
+                pgl.Vector3(4, 0, 1),
+            ]
+        )
+    ),
+    # The nine-point rational circle, which is the T8.6 acceptance case.
+    "nurbs_curve_2d_circle": lambda: pgl.NurbsCurve2D(
+        pgl.Point3Array(
+            [
+                pgl.Vector3(1, 0, 1),
+                pgl.Vector3(1, 1, math.sqrt(2) / 2),
+                pgl.Vector3(0, 1, 1),
+                pgl.Vector3(-1, 1, math.sqrt(2) / 2),
+                pgl.Vector3(-1, 0, 1),
+                pgl.Vector3(-1, -1, math.sqrt(2) / 2),
+                pgl.Vector3(0, -1, 1),
+                pgl.Vector3(1, -1, math.sqrt(2) / 2),
+                pgl.Vector3(1, 0, 1),
+            ]
+        ),
+        2,
+        pgl.RealArray([0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0]),
+    ),
+}
+
+# `BezierCurve::getTangentAt` differences the stored control points and calls
+# `project()` on the result, which divides by a difference of *weights* instead
+# of applying the quotient rule. For weight-1 curves the difference has w = 0
+# and upstream's answer is the right one; for a rational Bézier it is not a
+# tangent at all. `NurbsCurve::getTangentAt` goes through `deriveAt`, which is
+# correct in both cases. The port always applies the quotient rule, so tangents
+# are compared everywhere except upstream's broken case — where the Rust side
+# instead asserts that upstream still disagrees.
+TANGENT_IS_COMPARABLE = {name: name != "bezier_curve_rational" for name in CURVE_CASES}
+
+# The parameters every curve is sampled at, as a fraction of its knot range.
+CURVE_SAMPLES = 33
+
+# The stride every curve is discretised at, so the polyline point count is
+# fixed rather than inherited from a default that might change upstream.
+CURVE_STRIDE = 24
 
 
 # Upstream's SurfComputer and VolComputer do NOT always measure the mesh: for
@@ -132,7 +322,17 @@ def measure(geometry: Any) -> dict[str, Any]:
     # the axis of revolution. The port collapses those poles instead, so this
     # is exactly the difference in face count the Rust side should expect —
     # recorded rather than assumed.
+    # Faces whose normal points back towards the middle of the mesh. On a
+    # closed, star-shaped solid that number should be zero, and where it is not
+    # some face is wound the wrong way round — which upstream's own VolComputer
+    # cannot see, because it sums the *absolute* tetrahedra about the centroid.
+    # Recorded for every case so the Rust side can both pin the one place
+    # upstream gets it wrong and confirm it is the only one.
+    centroid = [
+        sum(p[axis] for p in mesh.pointList) / len(mesh.pointList) for axis in range(3)
+    ]
     degenerate = 0
+    inward = 0
     for i in range(mesh.indexListSize()):
         index = mesh.indexAt(i)
         if len(index) < 3:
@@ -144,12 +344,21 @@ def measure(geometry: Any) -> dict[str, Any]:
         )
         if area < 1e-9:
             degenerate += 1
+            continue
+        normal = pgl.cross(corners[1] - corners[0], corners[2] - corners[0])
+        outward = [
+            sum(c[axis] for c in corners) / len(corners) - centroid[axis]
+            for axis in range(3)
+        ]
+        if sum(normal[axis] * outward[axis] for axis in range(3)) < 0:
+            inward += 1
 
     return {
         "points": len(mesh.pointList),
         "faces": mesh.indexListSize(),
         "triangles": triangles.indexListSize(),
         "degenerate_faces": degenerate,
+        "inward_faces": inward,
         # `solid` decides whether upstream's VolComputer reports anything at
         # all, so it is part of the comparison rather than an aside.
         "solid": bool(mesh.solid),
@@ -172,6 +381,55 @@ def measure(geometry: Any) -> dict[str, Any]:
         # and not otherwise, so the honest thing is to record upstream's
         # number and let the Rust side say which cases it expects to match.
         "volume_method": "upstream_abs_about_centroid",
+    }
+
+
+def measure_curve(name: str, curve: Any) -> dict[str, Any]:
+    """Sampled points and tangents, plus the polyline the discretizer makes."""
+    curve.stride = CURVE_STRIDE
+    first, last = curve.firstKnot, curve.lastKnot
+    two_d = isinstance(curve, pgl.Curve2D)
+
+    def flatten(vector: Any) -> list[float]:
+        return [vector.x, vector.y] if two_d else [vector.x, vector.y, vector.z]
+
+    samples: list[float] = []
+    tangents: list[float] = []
+    for i in range(CURVE_SAMPLES):
+        u = first + (last - first) * i / (CURVE_SAMPLES - 1)
+        samples += flatten(curve.getPointAt(u))
+        tangents += flatten(curve.getTangentAt(u))
+
+    discretizer = pgl.Discretizer()
+    if not curve.apply(discretizer):
+        raise RuntimeError("upstream failed to discretise the curve")
+    polyline = discretizer.result
+
+    return {
+        "dimensions": 2 if two_d else 3,
+        "first_knot": first,
+        "last_knot": last,
+        "stride": CURVE_STRIDE,
+        "sample_count": CURVE_SAMPLES,
+        "samples": samples,
+        "tangents": tangents,
+        "tangent_is_comparable": TANGENT_IS_COMPARABLE[name],
+        # `BezierCurve::getTangentAt` special-cases both ends and gets both
+        # wrong: at u = 0 it returns the *normalised* P1 - P0, and at u = 1 the
+        # raw P(n) - P(n-1) without the factor of the degree. Its interior
+        # branch is the true derivative, so upstream's own tangent is
+        # discontinuous at both ends of every Bézier curve. The Rust side
+        # compares the interior and pins the two endpoints as defects.
+        # An exact class check, not `isinstance`: upstream derives NurbsCurve
+        # from BezierCurve (and NurbsCurve2D from BezierCurve2D) but overrides
+        # `getTangentAt` with the correct `deriveAt`, so the NURBS classes do
+        # not carry the defect their base class does.
+        "tangent_endpoints_comparable": type(curve).__name__
+        not in ("BezierCurve", "BezierCurve2D"),
+        # The discretizer always produces a 3D polyline; a 2D curve is embedded
+        # at z = 0.
+        "discretized": [c for p in polyline.pointList for c in (p.x, p.y, p.z)],
+        "length": curve.getLength(),
     }
 
 
@@ -206,6 +464,15 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001 - report, do not mask
                 failures[key] = f"{type(exc).__name__}: {exc}"
 
+    curves: dict[str, Any] = {}
+    for name, build_curve in CURVE_CASES.items():
+        if args.only and name != args.only:
+            continue
+        try:
+            curves[name] = measure_curve(name, build_curve())
+        except Exception as exc:  # noqa: BLE001 - report, do not mask
+            failures[name] = f"{type(exc).__name__}: {exc}"
+
     document = {
         "_comment": (
             "Generated by tools/differential/upstream_measure.py from upstream "
@@ -215,6 +482,7 @@ def main() -> int:
         "plantgl_version": str(version),
         "slice_counts": list(SLICE_COUNTS),
         "cases": results,
+        "curves": curves,
     }
     if failures:
         document["failures"] = failures
@@ -223,7 +491,7 @@ def main() -> int:
         json.dump(document, handle, indent=2, sort_keys=True)
         handle.write("\n")
 
-    print(f"wrote {len(results)} measurements to {args.out}")
+    print(f"wrote {len(results)} measurements and {len(curves)} curves to {args.out}")
     for key, why in failures.items():
         print(f"  FAILED {key}: {why}", file=sys.stderr)
     return 1 if failures else 0
