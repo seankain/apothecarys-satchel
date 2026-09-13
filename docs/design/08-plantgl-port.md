@@ -547,7 +547,7 @@ Tracked as GitHub issues; this table is the index.
 |---|---|---|---|---|
 | A — Foundation | [#17](https://github.com/seankain/apothecarys-satchel/issues/17) | T8.1–T8.3: crate + licensing, math/frames, scene graph, OBJ + golden harness | ~1 week | **done** |
 | B — Primitives | [#18](https://github.com/seankain/apothecarys-satchel/issues/18) | T8.4–T8.5: parametric primitives, discretizer, tessellator, measurement | ~1.5 weeks | **done** |
-| C — Curves | [#19](https://github.com/seankain/apothecarys-satchel/issues/19) | T8.6–T8.7: Bézier/NURBS, patches, `Extrusion` | ~1.5 weeks | not started |
+| C — Curves | [#19](https://github.com/seankain/apothecarys-satchel/issues/19) | T8.6–T8.7: Bézier/NURBS, patches, `Extrusion` | ~1.5 weeks | **done** |
 | D — Turtle | [#20](https://github.com/seankain/apothecarys-satchel/issues/20) | T8.8–T8.9: turtle core, GC, polygons, guides, tropism | ~1.5 weeks | not started |
 | E — Integration | [#21](https://github.com/seankain/apothecarys-satchel/issues/21) | T8.10–T8.12: rewire botany, Fyrox bridge, doc reconciliation | ~1 week | not started |
 | F — Optional | [#22](https://github.com/seankain/apothecarys-satchel/issues/22) | T8.13–T8.17: space colonization, PLY/glTF, hulls, instancing | as needed | not started |
@@ -596,6 +596,58 @@ The pre-port baseline asked for in T8.3 is captured in
 `crates/botany/tests/golden/` by `crates/botany/tests/golden_pre_plantgl.rs` —
 the *current* generator's own OBJ/MTL output for five fixed seeds, so Phase E's
 visual change is a reviewable diff.
+
+### What Phase C actually landed
+
+Every `Geometry` variant now discretises; the stubs are gone.
+
+- `scenegraph/curve/spline.rs` — de Casteljau, de Boor, the knot-span search and
+  the derivative basis functions (Piegl and Tiller A2.1, A2.2, A2.3, A4.2), plus
+  `BezierCurve`, `NurbsCurve` and their 2D counterparts, degree elevation, knot
+  validation, and `NurbsCurve2D::circle` — the exact nine-point rational circle.
+- `scenegraph/curve/patch.rs` — tensor-product `BezierPatch` and `NurbsPatch`
+  with analytic partials and normals.
+- `scenegraph/curve/mod.rs` — the `ParametricCurve` trait carrying upstream's
+  `Curve2D`/`LineicModel` operation set, over the `Curve2D` and `Curve3D` sum
+  types.
+- `scenegraph/function.rs` — `QuantisedFunction`, the sampled radius profile.
+- `scenegraph/primitive/extrusion.rs` and `Discretizer::extrusion` — the
+  generalized cylinder, with upstream's `ProfileTransformation` inlined as the
+  `scale`/`orientation`/`knot_list` triple.
+
+Three deliberate departures, each asserted as a divergence in
+`tests/differential.rs` rather than excused:
+
+1. **Knot arithmetic runs in `f64`.** Upstream's `real_t` is `f32`, and the port
+   keeps that for stored geometry, but the basis functions divide by differences
+   of knots — on a 200-control-point curve those are ~5e-3 apart, which is where
+   `f32` runs out. Only the finished point is narrowed.
+2. **Swept frames are rotation-minimising by double reflection** (Wang et al.
+   2008, fourth-order) where upstream re-derives each frame from the previous
+   binormal (second-order). Identical on a straight axis; a bounded rotation of
+   each ring on a curved one. The helix no-flip test is the regression guard.
+3. **One control-net layout for both patches.** Upstream's `BezierPatch` reads
+   its matrix `[v][u]` and its `NurbsPatch` reads the same matrix `[u][v]`; the
+   port uses `[u][v]` throughout.
+
+The harness found three further upstream defects while Phase C went in. Two are
+in `BezierCurve::getTangentAt`: it divides by a difference of *weights* instead
+of applying the quotient rule, so a rational Bézier's tangent is not a tangent;
+and it special-cases both end points, returning a normalised difference at
+`u = 0` and an unscaled one at `u = 1`, so upstream's tangent field is
+discontinuous at both ends of every Bézier curve. `NurbsCurve::getTangentAt`
+overrides all of it correctly. The third is in
+`Discretizer::process(Extrusion*)`, which fans both end caps in the same vertex
+order and so gives every solid sweep a base that faces inward — invisible to
+upstream, whose `VolComputer` sums *absolute* tetrahedra about the centroid, and
+to any comparison of face counts or areas. All three are pinned by tests that
+fail if a rebase fixes them, and the extrusion one is why the harness now
+records an `inward_faces` count for every case.
+
+`Swung` is the one thing still partial: upstream *fits* a NURBS through its
+profiles (`ProfileInterpolation`), which is an interpolation problem rather than
+an evaluation one, so the spline evaluators here do not supply it. Degree 1 is
+translated; higher degrees report `Error::Unsupported`.
 
 ---
 

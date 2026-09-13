@@ -534,6 +534,43 @@ impl Polyline {
             .map(|pair| (pair[1] - pair[0]).norm())
             .sum()
     }
+
+    /// `getPointAt(u)`: upstream's `Polyline` is a `LineicModel` as well as an
+    /// explicit model, and its parameter is the point index, so `u = 2.5` is
+    /// half way along its third segment.
+    pub fn eval(&self, u: Real) -> Result<Point3> {
+        self.is_valid()?;
+        Ok(crate::scenegraph::curve::interpolate(
+            &self.points,
+            u,
+            |a, b, t| a + (b - a) * t,
+        ))
+    }
+
+    /// `getTangentAt(u)` — the segment direction, and at an interior vertex the
+    /// length-weighted mean of the two segments meeting there, as upstream.
+    pub fn tangent(&self, u: Real) -> Result<Vec3> {
+        self.is_valid()?;
+        Ok(crate::scenegraph::curve::polyline_tangent(
+            &self.points,
+            u,
+            |a, b| b - a,
+        ))
+    }
+
+    /// `getNormalAt(u)`. A polyline has no curvature to take a principal normal
+    /// from, so upstream picks a perpendicular against a world axis — `+Z`, or
+    /// `+X` where the tangent is itself along `Z`. A swept surface uses this
+    /// only to fix the phase of its first cross-section.
+    pub fn normal(&self, u: Real) -> Result<Vec3> {
+        let tangent = self.tangent(u)?;
+        let reference = if tangent.x.abs() < EPSILON && tangent.y.abs() < EPSILON {
+            Vec3::x()
+        } else {
+            Vec3::z()
+        };
+        Ok(tangent.cross(&reference))
+    }
 }
 
 /// Upstream's `Group` — several geometries treated as one, with an optional
