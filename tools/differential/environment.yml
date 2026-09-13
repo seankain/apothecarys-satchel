@@ -1,0 +1,43 @@
+# Conda environment for the differential harness — see README.md.
+#
+# This is a DEVELOPMENT tool. It is never a build or test dependency: the
+# differential gate in `crates/plantgl/tests/differential.rs` reads a committed
+# `reference.json` and needs nothing but `cargo test`. You only need this
+# environment to regenerate that file.
+#
+# PREFER the plain `conda create` form from README.md, which is the one that
+# reliably works:
+#
+#   conda create -n plantgl-diff --override-channels \
+#       -c openalea3 -c conda-forge python=3.11 openalea.plantgl
+#
+# `conda env create -f` has no `--override-channels`, and the `nodefaults`
+# entry below is NOT sufficient on its own: conda still consults the
+# `defaults` channels from the global config while solving and fails with
+# CondaToSNonInteractiveError. To use this file anyway, neutralise them for
+# the one command:
+#
+#   CONDA_DEFAULT_CHANNELS="" conda env create -f tools/differential/environment.yml
+#
+# Those Anaconda channels carry Terms of Service that must be accepted before
+# use and restrict commercial use at some organisation sizes. Nothing here
+# needs them, so the project stays clear of the question entirely.
+#
+# Then:
+#
+#   conda run -n plantgl-diff python tools/differential/upstream_measure.py \
+#       --out crates/plantgl/tests/reference.json
+name: plantgl-diff
+
+channels:
+  - openalea3
+  - conda-forge
+  - nodefaults
+
+dependencies:
+  # The reference committed to crates/plantgl/tests/reference.json was
+  # generated with openalea.plantgl 3.21.2 on python 3.11. The version is left
+  # unpinned so a rebase is a deliberate act: regenerate, read the diff, and
+  # update `plantgl_version` in the JSON by regenerating rather than by hand.
+  - python=3.11
+  - openalea.plantgl

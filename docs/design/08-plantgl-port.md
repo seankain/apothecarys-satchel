@@ -546,7 +546,7 @@ Tracked as GitHub issues; this table is the index.
 | Phase | Issue | Contents | Estimate | State |
 |---|---|---|---|---|
 | A — Foundation | [#17](https://github.com/seankain/apothecarys-satchel/issues/17) | T8.1–T8.3: crate + licensing, math/frames, scene graph, OBJ + golden harness | ~1 week | **done** |
-| B — Primitives | [#18](https://github.com/seankain/apothecarys-satchel/issues/18) | T8.4–T8.5: parametric primitives, discretizer, tessellator, measurement | ~1.5 weeks | not started |
+| B — Primitives | [#18](https://github.com/seankain/apothecarys-satchel/issues/18) | T8.4–T8.5: parametric primitives, discretizer, tessellator, measurement | ~1.5 weeks | **done** |
 | C — Curves | [#19](https://github.com/seankain/apothecarys-satchel/issues/19) | T8.6–T8.7: Bézier/NURBS, patches, `Extrusion` | ~1.5 weeks | not started |
 | D — Turtle | [#20](https://github.com/seankain/apothecarys-satchel/issues/20) | T8.8–T8.9: turtle core, GC, polygons, guides, tropism | ~1.5 weeks | not started |
 | E — Integration | [#21](https://github.com/seankain/apothecarys-satchel/issues/21) | T8.10–T8.12: rewire botany, Fyrox bridge, doc reconciliation | ~1 week | not started |
