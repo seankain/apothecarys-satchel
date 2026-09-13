@@ -20,10 +20,18 @@ pub use appearance::{
     Appearance, AppearanceRef, Color3, Color4, ImageTexture, Material, Texture2D,
     Texture2DTransformation,
 };
+pub use curve::{
+    BezierCurve, BezierCurve2D, BezierPatch, Curve2D, Curve2DRef, NurbsCurve, NurbsCurve2D,
+    NurbsPatch, Polyline2D,
+};
 pub use geometry::{Geometry, GeometryRef, GeometryVisitor};
 pub use mesh::{
     ExplicitModel, FaceIndex, FaceSet, Group, Index, Index3, Index4, IndexedMesh, PointSet,
     Polyline, QuadSet, TriangleSet,
+};
+pub use primitive::{
+    Box3, Cone, Cylinder, Disc, ElevationGrid, Extrusion, Frustum, HeightField, Paraboloid,
+    Revolution, Sphere, Swung,
 };
 pub use scene::{Scene, Shape, NOID};
 pub use transform::{Deformation, Taper, Transform, Transformed};

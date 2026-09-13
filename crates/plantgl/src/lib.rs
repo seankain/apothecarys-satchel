@@ -17,11 +17,36 @@
 //!
 //! # What is here today
 //!
-//! Phase A of the port: the math layer, the explicit (vertex-list) geometry,
-//! appearances, scenes, transformations, transform accumulation, bounding
-//! boxes and OBJ export. Parametric primitives, curves and the turtle are
-//! stubbed variants of [`Geometry`] that visitors report as
-//! [`Error::Unsupported`]; see `docs/design/08-plantgl-port.md`.
+//! Phases A and B of the port:
+//!
+//! - **A** — the math layer, explicit (vertex-list) geometry, appearances,
+//!   scenes, transformations, transform accumulation and OBJ export.
+//! - **B** — the parametric primitives ([`scenegraph::primitive`]) and the
+//!   pipeline over them: [`algo::discretize`] samples them to explicit meshes,
+//!   [`algo::tessellate`] reduces those to triangles, [`algo::merge`] batches
+//!   them by appearance, and [`algo::measure`], [`algo::bbox`] and
+//!   [`algo::bsphere`] read them.
+//!
+//! Curves, patches and `Extrusion` are Phase C: they remain stubbed variants of
+//! [`Geometry`] that visitors report as [`Error::Unsupported`]. See
+//! `docs/design/08-plantgl-port.md`.
+//!
+//! ```
+//! use plantgl::algo::{discretize, measure, tessellate};
+//! use plantgl::scenegraph::{Cylinder, Geometry};
+//!
+//! let stem = Geometry::from(Cylinder::sized(0.05, 1.0));
+//! let mesh = discretize::discretize(&stem).unwrap();
+//!
+//! // Surface area is a gameplay input as much as a rendering one: it is a
+//! // principled harvest-yield driver tied to the visible phenotype.
+//! let area = measure::surface_area(&mesh).unwrap();
+//! assert!((area - (0.05f32 * 1.0 * std::f32::consts::TAU
+//!     + 2.0 * std::f32::consts::PI * 0.05 * 0.05)).abs() < 0.01);
+//!
+//! let triangles = tessellate::tessellate(&mesh).unwrap();
+//! assert_eq!(triangles.face_count(), 32);
+//! ```
 //!
 //! ```
 //! use plantgl::{Geometry, Scene, Shape, TriangleSet};
@@ -52,9 +77,14 @@ pub mod error;
 pub mod math;
 pub mod scenegraph;
 
+pub use algo::{
+    bounding_box, bounding_sphere, discretize, merge_scene, surface_area, tessellate, volume,
+    BoundingBox, BoundingSphere, DiscretizeCtx, Discretizer, Explicit,
+};
 pub use error::{Error, Result};
 pub use math::Frame;
 pub use scenegraph::{
-    Appearance, AppearanceRef, Color3, Color4, Geometry, GeometryRef, GeometryVisitor, Group,
-    Material, Scene, Shape, TriangleSet,
+    Appearance, AppearanceRef, Box3, Color3, Color4, Cone, Curve2D, Cylinder, Disc, ElevationGrid,
+    Frustum, Geometry, GeometryRef, GeometryVisitor, Group, Material, Paraboloid, Polyline2D,
+    Revolution, Scene, Shape, Sphere, Swung, TriangleSet,
 };

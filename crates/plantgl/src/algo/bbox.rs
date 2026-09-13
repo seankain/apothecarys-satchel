@@ -9,14 +9,17 @@
 //! and is likewise licensed CeCILL-C; see crates/plantgl/LICENSE.
 //!
 //! Upstream's `BBoxComputer` reaches parametric primitives through a
-//! `Discretizer`. That is Phase B (#18); until then this computer covers the
-//! explicit models and reports the rest as [`Error::Unsupported`].
+//! `Discretizer`, and so does this one now that Phase B (#18) has one. The box
+//! of a discretised primitive is the box of its *sampled* points, which is
+//! marginally tighter than the box of the ideal surface — a discretised sphere
+//! is inscribed in the true one — and is the box the renderer actually draws.
 
 use crate::error::Result;
 use crate::math::{Mat4, Point3, Real, Vec3};
 use crate::scenegraph::geometry::{Geometry, GeometryRef};
 use crate::scenegraph::transform::Deformation;
 
+use super::discretize::Discretizer;
 use super::matrix::{MatrixComputer, Placement};
 
 /// An axis-aligned bounding box — upstream's `BoundingBox`.
@@ -154,11 +157,28 @@ impl BoundingBox {
 #[derive(Debug, Clone, Default)]
 pub struct BBoxComputer {
     matrix: MatrixComputer,
+    discretizer: Discretizer,
 }
 
 impl BBoxComputer {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            matrix: MatrixComputer::new(),
+            // Texture coordinates cost work and cannot move a bounding box.
+            discretizer: Discretizer::with_defaults().with_tex_coords(false),
+        }
+    }
+
+    /// A computer that discretises parametric primitives at the given density.
+    ///
+    /// The density changes the box slightly — a coarser sphere is inscribed in
+    /// a finer one — so a culling volume should be built at the density the
+    /// renderer will actually draw.
+    pub fn with_discretizer(discretizer: Discretizer) -> Self {
+        Self {
+            matrix: MatrixComputer::new(),
+            discretizer,
+        }
     }
 
     /// The bounding box of a whole geometry tree in the tree's own frame, or
@@ -168,7 +188,7 @@ impl BBoxComputer {
         let leaves = self.matrix.flatten(geometry)?;
         let mut result: Option<BoundingBox> = None;
         for (placement, leaf) in leaves {
-            let Some(bbox) = Self::leaf_bbox(&placement, &leaf)? else {
+            let Some(bbox) = self.leaf_bbox(&placement, &leaf)? else {
                 continue;
             };
             result = Some(match result {
@@ -180,14 +200,24 @@ impl BBoxComputer {
     }
 
     /// The bounding box of one placed leaf.
-    fn leaf_bbox(placement: &Placement, leaf: &Geometry) -> Result<Option<BoundingBox>> {
+    fn leaf_bbox(
+        &mut self,
+        placement: &Placement,
+        leaf: &Geometry,
+    ) -> Result<Option<BoundingBox>> {
+        // Explicit models are read straight off; a parametric primitive is
+        // discretised first, as upstream's computer does.
+        let owned;
         let points: &[Point3] = match leaf {
             Geometry::TriangleSet(m) => &m.model.points,
             Geometry::QuadSet(m) => &m.model.points,
             Geometry::FaceSet(m) => &m.model.points,
             Geometry::PointSet(p) => &p.points,
             Geometry::Polyline(p) => &p.points,
-            other => return Err(other.unsupported()),
+            parametric => {
+                owned = self.discretizer.discretize(parametric)?;
+                owned.points()
+            }
         };
         if points.is_empty() {
             return Ok(None);
@@ -318,13 +348,23 @@ mod tests {
         assert_relative_eq!(bbox.upper_right, Point3::new(1.0, 0.0, 1.0), epsilon = 1e-6);
     }
 
+    /// Phase B gave the computer a discretizer, so parametric primitives are
+    /// in range now.
+    #[test]
+    fn computer_reaches_a_parametric_primitive() {
+        let tree = Geometry::from(Sphere::sized(2.0)).into_ref();
+        let bbox = bounding_box(&tree).unwrap().unwrap();
+        assert_relative_eq!(bbox.center(), Point3::origin(), epsilon = 1e-4);
+        // The discretised sphere is inscribed in the ideal one, so the box is
+        // at most 2r on a side and no less than the mid-latitude ring's.
+        assert!(bbox.extent().x <= 4.0 + 1e-4, "{:?}", bbox.extent());
+        assert!(bbox.extent().z > 3.8, "{:?}", bbox.extent());
+    }
+
     #[test]
     fn computer_reports_unported_primitives() {
-        let tree = Geometry::Sphere(Sphere::default()).into_ref();
-        assert!(matches!(
-            bounding_box(&tree),
-            Err(Error::Unsupported(_))
-        ));
+        let tree = Geometry::Extrusion(crate::scenegraph::primitive::Extrusion).into_ref();
+        assert!(matches!(bounding_box(&tree), Err(Error::Unsupported(_))));
     }
 
     #[test]

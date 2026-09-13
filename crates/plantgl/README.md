@@ -46,14 +46,31 @@ for the full plan.
 
 | Phase | Contents | State |
 |---|---|---|
-| A | Crate, licensing, math + frames, explicit meshes, scene graph, transforms, OBJ export | **this crate today** |
-| B | Parametric primitives, discretizer, tessellator, measurement | not started |
+| A | Crate, licensing, math + frames, explicit meshes, scene graph, transforms, OBJ export | **done** |
+| B | Parametric primitives, discretizer, tessellator, measurement, bounding volumes, merge | **this crate today** |
 | C | Bézier/NURBS curves and patches, `Extrusion` | not started |
 | D | Turtle, generalized cylinders, guides, tropism | not started |
 
-Variants of `Geometry` whose primitives are not yet ported are present as
-stubs so the enum shape is stable; visitors report them as
-`Error::Unsupported`.
+Variants of `Geometry` whose primitives are not yet ported — the curves, the
+patches and `Extrusion`, all Phase C — are present as stubs so the enum shape
+is stable; visitors report them as `Error::Unsupported`. `Swung` is ported, but
+its cross-profile interpolation is available at degree 1 only; higher degrees
+need the NURBS interpolation Phase C brings and report `Error::Unsupported`
+rather than silently blending linearly.
+
+## Differential testing
+
+Because the CeCILL-C decision lets us read *and run* upstream, the port is
+checked against real PlantGL rather than only against hand-derived closed
+forms. `tools/differential/` in the repository root drives a conda-installed
+PlantGL and writes `tests/reference.json`; `tests/differential.rs` compares
+against it and needs no Python, so the gate runs on every `cargo test`. See
+`tools/differential/README.md`.
+
+It has already found two defects in upstream's own analytic formulas — the
+`Disc` surface returns the circumference, and the solid `Frustum` surface adds
+its end caps as `π(r + q)` rather than `π(r² + q²)` — both of which the port
+measures correctly and does not reproduce.
 
 ## Design notes
 
