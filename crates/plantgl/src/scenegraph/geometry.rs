@@ -23,6 +23,18 @@ use crate::scenegraph::primitive::{
     Box3, Cone, Cylinder, Disc, ElevationGrid, Extrusion, Frustum, Paraboloid, Revolution, Sphere,
     Swung,
 };
+
+macro_rules! impl_from_geometry {
+    ($($type:ty => $variant:ident),* $(,)?) => {
+        $(
+            impl From<$type> for Geometry {
+                fn from(value: $type) -> Self {
+                    Geometry::$variant(value)
+                }
+            }
+        )*
+    };
+}
 use crate::scenegraph::transform::Transformed;
 
 /// Shared geometry handle.
@@ -42,7 +54,7 @@ pub type GeometryRef = Arc<Geometry>;
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Geometry {
-    // Parametric primitives — Phase B (#18).
+    // Parametric primitives — ported in Phase B (#18).
     Box(Box3),
     Sphere(Sphere),
     Cone(Cone),
@@ -109,17 +121,16 @@ impl Geometry {
     }
 
     /// Whether this variant's primitive has been translated yet. `false`
-    /// means the variant is one of the Phase B/C placeholders.
+    /// means the variant is one of the Phase C placeholders — the curves,
+    /// the patches and the extrusion.
     pub fn is_ported(&self) -> bool {
-        matches!(
+        !matches!(
             self,
-            Geometry::TriangleSet(_)
-                | Geometry::QuadSet(_)
-                | Geometry::FaceSet(_)
-                | Geometry::PointSet(_)
-                | Geometry::Polyline(_)
-                | Geometry::Group(_)
-                | Geometry::Transformed(_)
+            Geometry::BezierCurve(_)
+                | Geometry::NurbsCurve(_)
+                | Geometry::BezierPatch(_)
+                | Geometry::NurbsPatch(_)
+                | Geometry::Extrusion(_)
         )
     }
 
@@ -173,40 +184,23 @@ pub trait GeometryVisitor {
     }
 }
 
-impl From<TriangleSet> for Geometry {
-    fn from(m: TriangleSet) -> Self {
-        Geometry::TriangleSet(m)
-    }
-}
-
-impl From<QuadSet> for Geometry {
-    fn from(m: QuadSet) -> Self {
-        Geometry::QuadSet(m)
-    }
-}
-
-impl From<FaceSet> for Geometry {
-    fn from(m: FaceSet) -> Self {
-        Geometry::FaceSet(m)
-    }
-}
-
-impl From<PointSet> for Geometry {
-    fn from(m: PointSet) -> Self {
-        Geometry::PointSet(m)
-    }
-}
-
-impl From<Polyline> for Geometry {
-    fn from(m: Polyline) -> Self {
-        Geometry::Polyline(m)
-    }
-}
-
-impl From<Group> for Geometry {
-    fn from(g: Group) -> Self {
-        Geometry::Group(g)
-    }
+impl_from_geometry! {
+    Box3 => Box,
+    Sphere => Sphere,
+    Cone => Cone,
+    Cylinder => Cylinder,
+    Frustum => Frustum,
+    Disc => Disc,
+    Paraboloid => Paraboloid,
+    Revolution => Revolution,
+    Swung => Swung,
+    ElevationGrid => ElevationGrid,
+    TriangleSet => TriangleSet,
+    QuadSet => QuadSet,
+    FaceSet => FaceSet,
+    PointSet => PointSet,
+    Polyline => Polyline,
+    Group => Group,
 }
 
 impl From<Transformed> for Geometry {
@@ -286,12 +280,20 @@ mod tests {
     }
 
     #[test]
-    fn stub_variants_report_themselves_as_unported() {
-        let stub = Geometry::Sphere(Sphere::default());
+    fn phase_c_variants_report_themselves_as_unported() {
+        let stub = Geometry::Extrusion(crate::scenegraph::primitive::Extrusion);
         assert!(!stub.is_ported());
         assert!(!stub.is_explicit());
-        assert_eq!(stub.type_name(), "Sphere");
+        assert_eq!(stub.type_name(), "Extrusion");
         assert!(matches!(stub.unsupported(), Error::Unsupported(_)));
+    }
+
+    #[test]
+    fn phase_b_primitives_are_ported_but_not_explicit() {
+        let sphere = Geometry::from(Sphere::default());
+        assert!(sphere.is_ported());
+        assert!(!sphere.is_explicit());
+        assert_eq!(sphere.type_name(), "Sphere");
     }
 
     #[test]
