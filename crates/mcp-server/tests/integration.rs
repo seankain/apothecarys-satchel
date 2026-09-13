@@ -177,6 +177,8 @@ mod apothecarys_mcp_server_test_helpers {
 
     pub struct TestState {
         pub placements_dir: PathBuf,
+        /// Mirrors `ServerState`; no test reads it yet.
+        #[allow(dead_code)]
         pub assets_dir: PathBuf,
         pub scenes: HashMap<String, PlacementData>,
     }

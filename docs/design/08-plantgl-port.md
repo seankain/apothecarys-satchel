@@ -106,18 +106,25 @@ not a license change for the game.
 
 ### Concrete obligations — Phase A deliverables
 
-- [ ] `crates/plantgl/LICENSE` — the full CeCILL-C v1 text
-- [ ] `crates/plantgl/Cargo.toml` — `license = "CECILL-C"` (SPDX identifier)
-- [ ] **Per-file provenance header** naming the upstream file each module derives
+All discharged in Phase A, and guarded by `crates/plantgl/tests/licensing.rs`
+so a deletion or truncation fails the build rather than surfacing at launch.
+
+- [x] `crates/plantgl/LICENSE` — the full CeCILL-C v1 text
+- [x] `crates/plantgl/Cargo.toml` — `license = "CECILL-C"` (SPDX identifier)
+- [x] **Per-file provenance header** naming the upstream file each module derives
       from (see the template below). Article 5.3.3 asks that Integrated
       Contributions be "clearly identified and documented"; per-file attribution
       discharges that and makes upstream diffs tractable when we rebase
-- [ ] Root `README.md` — a mixed-licensing note: the workspace is MIT except
+- [x] Root `README.md` — a mixed-licensing note: the workspace is MIT except
       `crates/plantgl`, which is CeCILL-C
-- [ ] `THIRD-PARTY-LICENSES` (or `NOTICE`) shipped with release builds, carrying
+- [x] `THIRD-PARTY-LICENSES` (or `NOTICE`) shipped with release builds, carrying
       the CeCILL-C text, the CIRAD/INRIA/INRA copyright notices, the
       warranty/liability notice, and a pointer to the port's source
-- [ ] Cite Pradal et al. 2009 (Graphical Models 71:1–21), as upstream requests
+- [x] Cite Pradal et al. 2009 (Graphical Models 71:1–21), as upstream requests
+
+The upstream commit the port was read at is
+`4f3fd6ae6cc89ef8f48285fb005bd80d1ff09189`; every provenance header names it,
+so a future rebase is a diff rather than archaeology.
 
 ```rust
 //! Ported from PlantGL `src/cpp/plantgl/scenegraph/geometry/extrusion.{h,cpp}`.
@@ -536,14 +543,14 @@ Fyrox's interleaved `StaticVertex` plus an index map — and with `real_t` as
 
 Tracked as GitHub issues; this table is the index.
 
-| Phase | Issue | Contents | Estimate |
-|---|---|---|---|
-| A — Foundation | [#17](https://github.com/seankain/apothecarys-satchel/issues/17) | T8.1–T8.3: crate + licensing, math/frames, scene graph, OBJ + golden harness | ~1 week |
-| B — Primitives | [#18](https://github.com/seankain/apothecarys-satchel/issues/18) | T8.4–T8.5: parametric primitives, discretizer, tessellator, measurement | ~1.5 weeks |
-| C — Curves | [#19](https://github.com/seankain/apothecarys-satchel/issues/19) | T8.6–T8.7: Bézier/NURBS, patches, `Extrusion` | ~1.5 weeks |
-| D — Turtle | [#20](https://github.com/seankain/apothecarys-satchel/issues/20) | T8.8–T8.9: turtle core, GC, polygons, guides, tropism | ~1.5 weeks |
-| E — Integration | [#21](https://github.com/seankain/apothecarys-satchel/issues/21) | T8.10–T8.12: rewire botany, Fyrox bridge, doc reconciliation | ~1 week |
-| F — Optional | [#22](https://github.com/seankain/apothecarys-satchel/issues/22) | T8.13–T8.17: space colonization, PLY/glTF, hulls, instancing | as needed |
+| Phase | Issue | Contents | Estimate | State |
+|---|---|---|---|---|
+| A — Foundation | [#17](https://github.com/seankain/apothecarys-satchel/issues/17) | T8.1–T8.3: crate + licensing, math/frames, scene graph, OBJ + golden harness | ~1 week | **done** |
+| B — Primitives | [#18](https://github.com/seankain/apothecarys-satchel/issues/18) | T8.4–T8.5: parametric primitives, discretizer, tessellator, measurement | ~1.5 weeks | not started |
+| C — Curves | [#19](https://github.com/seankain/apothecarys-satchel/issues/19) | T8.6–T8.7: Bézier/NURBS, patches, `Extrusion` | ~1.5 weeks | not started |
+| D — Turtle | [#20](https://github.com/seankain/apothecarys-satchel/issues/20) | T8.8–T8.9: turtle core, GC, polygons, guides, tropism | ~1.5 weeks | not started |
+| E — Integration | [#21](https://github.com/seankain/apothecarys-satchel/issues/21) | T8.10–T8.12: rewire botany, Fyrox bridge, doc reconciliation | ~1 week | not started |
+| F — Optional | [#22](https://github.com/seankain/apothecarys-satchel/issues/22) | T8.13–T8.17: space colonization, PLY/glTF, hulls, instancing | as needed | not started |
 
 **Core total: ~6.5 weeks**, ~6 500 lines of Rust excluding tests. Upstream's C++
 in the ported scope is roughly 45 000 lines; the reduction is real, not optimism
@@ -552,6 +559,43 @@ codecs, the container library and the manual refcounting, and sum types collapse
 the double-dispatch boilerplate that dominates `algo/base`.
 
 Full task breakdowns and acceptance criteria live in the issues.
+
+### What Phase A actually landed
+
+`crates/plantgl` builds, is wired into the workspace and depends on neither
+`apothecarys-core` nor Fyrox:
+
+- `math/` — nalgebra aliases, upstream's tolerances and angle constants, the
+  ZYX Euler rotation and orthonormal basis upstream's transformations use, and
+  `Frame` with Gram-Schmidt re-orthonormalisation plus rotation-minimising
+  frame propagation by double reflection.
+- `scenegraph/` — `ExplicitModel`, `IndexedMesh` (`TriangleSet`/`QuadSet`/
+  `FaceSet`), `PointSet`, `Polyline`, `Group`, the `Geometry` sum type with a
+  `GeometryVisitor` whose provided `walk` handles `Group`/`Transformed`
+  recursion, `Transform`/`Transformed`/`Taper`, the appearance types, and
+  `Scene`/`Shape`.
+- `algo/` — `MatrixComputer` with its separate deformation stack, and
+  `BBoxComputer`/`BoundingBox`.
+- `codec/obj.rs` — OBJ and MTL writing with fixed float formatting, plus a
+  reader, so export round-trips.
+- `tests/` — golden snapshots with `UPDATE_GOLDEN=1`, proptest invariants, and
+  the licensing guards.
+
+Two deliberate departures from upstream behaviour, both documented at the
+divergence:
+
+1. `MatrixComputer::process(Tapered*)` upstream falls through to
+   `default_process` and drops the taper. The port records it on a deformation
+   stack instead, so "the transform at this leaf" is never silently incomplete.
+2. `Mesh::computeNormalPerVertex`'s degenerate-normal guard compares against a
+   NaN produced by normalising a zero-length cross product, and every
+   comparison against NaN is false, so the NaN reaches the vertex buffer. The
+   port checks the input instead.
+
+The pre-port baseline asked for in T8.3 is captured in
+`crates/botany/tests/golden/` by `crates/botany/tests/golden_pre_plantgl.rs` —
+the *current* generator's own OBJ/MTL output for five fixed seeds, so Phase E's
+visual change is a reviewable diff.
 
 ---
 

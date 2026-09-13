@@ -5,6 +5,9 @@ use std::path::PathBuf;
 use crate::error::McpError;
 
 pub struct ServerState {
+    /// Kept for tools that resolve paths outside `placements_dir` and
+    /// `assets_dir`; nothing reads it yet.
+    #[allow(dead_code)]
     pub project_root: PathBuf,
     pub placements_dir: PathBuf,
     pub assets_dir: PathBuf,

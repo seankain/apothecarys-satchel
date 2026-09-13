@@ -30,10 +30,41 @@ crates/
   dialogue/      - YarnSpinner parser and runner (stub)
   scripting/     - Lua scripting integration (stub)
   botany/        - Plant genetics and L-system generation (stub)
+  plantgl/       - Geometry and turtle modelling, ported from PlantGL (CeCILL-C)
   garden/        - Garden plot management (stub)
   persistence/   - Save/load system (stub)
   tools/         - Editor tooling (stub)
 ```
+
+## Licensing
+
+The workspace is MIT (see `LICENSE`) **except `crates/plantgl`**, which is a
+Rust translation of [openalea/plantgl](https://github.com/openalea/plantgl) and
+is therefore governed by the **CeCILL-C** license — see
+`crates/plantgl/LICENSE`.
+
+| Component | License |
+|---|---|
+| `crates/plantgl` | CeCILL-C |
+| Every other crate — `core`, `botany`, `game`, `garden`, `tools`, … | MIT |
+| Root `LICENSE` | MIT |
+| Shipped game binary | MIT, with a third-party notice |
+
+CeCILL-C Article 5.3.3 permits Derivative Software under another license
+provided the Article 6.4 notice of rights is carried and the port's source
+stays available. `THIRD-PARTY-LICENSES` at the repository root is that notice
+and **must ship with release builds**; it carries the CeCILL-C text, the
+CIRAD/INRIA/INRA copyright notices, the warranty and liability notice and a
+pointer to the port's source. There is no LGPL §4 analogue, so Rust's static
+linking is not a problem.
+
+Work using PlantGL is asked to cite:
+
+> Pradal C., Boudon F., Nouguier C., Chopard J., Godin C. 2009. PlantGL: A
+> python-based geometric library for 3D plant modelling at different scales.
+> *Graphical Models*, 71: 1–21.
+
+> Not legal advice. Worth a lawyer's eye before commercial distribution.
 
 ## Building
 
@@ -64,6 +95,11 @@ cargo test -p apothecarys-core
 cargo test -p apothecarys-navigation
 cargo test -p apothecarys-inventory
 cargo test -p apothecarys-game
+cargo test -p plantgl
+
+# Refresh the OBJ golden snapshots after a deliberate change, then read the diff
+UPDATE_GOLDEN=1 cargo test -p plantgl --test golden
+UPDATE_GOLDEN=1 cargo test -p apothecarys-botany --test golden_pre_plantgl
 ```
 
 ## Linting
@@ -87,5 +123,7 @@ The game is developed in incremental phases:
 - **Phase 5**: Plant genetics, L-systems, garden
 - **Phase 6**: Save/load, hub integration, UI
 - **Phase 7**: Editor tooling
+- **Phase 8**: PlantGL port — `crates/plantgl` replaces the hand-rolled plant
+  mesh generation. See `docs/design/08-plantgl-port.md`.
 
 See `docs/design/07-task-breakdown.md` for the full task dependency graph.

@@ -1,0 +1,25 @@
+[package]
+name = "plantgl"
+version = "0.1.0"
+edition = "2021"
+license = "CECILL-C"
+description = "Geometry and turtle modelling for procedural plants, ported from PlantGL"
+readme = "README.md"
+repository = "https://github.com/seankain/apothecarys-satchel"
+keywords = ["plant", "geometry", "procedural", "turtle", "mesh"]
+categories = ["graphics", "science"]
+
+[dependencies]
+nalgebra = { workspace = true }
+# `rc` lets the derive see through the `Arc`s the scene graph shares.
+serde = { workspace = true, optional = true, features = ["rc"] }
+thiserror = "2"
+
+[dev-dependencies]
+approx = "0.5"
+proptest = "1"
+serde_json = { workspace = true }
+
+[features]
+default = ["serde"]
+serde = ["dep:serde", "nalgebra/serde-serialize"]
