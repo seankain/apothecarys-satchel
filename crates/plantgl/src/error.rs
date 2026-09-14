@@ -39,6 +39,11 @@ pub enum Error {
     #[error("bad knot vector: {0}")]
     BadKnotVector(String),
 
+    /// `surface(name, …)` naming a template the turtle's surface library does
+    /// not hold. Upstream warns and draws nothing.
+    #[error("unknown surface: {0}")]
+    UnknownSurface(String),
+
     /// An operation that is valid in general but not for this geometry — in
     /// particular a `Geometry` variant whose primitive is not yet ported.
     #[error("unsupported operation: {0}")]

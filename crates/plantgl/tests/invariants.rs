@@ -9,7 +9,8 @@
 
 use plantgl::algo::bbox::{bounding_box, BoundingBox};
 use plantgl::codec::{from_obj, to_obj};
-use plantgl::math::{frame::rotation_minimizing_frames, Frame, Point3, Vec3};
+use plantgl::math::{frame::rotation_minimizing_frames, Frame, Point3, Real, Vec3};
+use plantgl::modelling::{MeasureDrawer, Turtle};
 use plantgl::{Geometry, Scene, Shape, TriangleSet};
 use proptest::prelude::*;
 use proptest::test_runner::FileFailurePersistence;
@@ -20,6 +21,39 @@ fn coordinate() -> impl Strategy<Value = f32> {
 
 fn point() -> impl Strategy<Value = Point3> {
     (coordinate(), coordinate(), coordinate()).prop_map(|(x, y, z)| Point3::new(x, y, z))
+}
+
+/// One turtle command, as an L-system driver would issue it.
+#[derive(Debug, Clone, Copy)]
+enum Command {
+    Forward(Real),
+    Left(Real),
+    Down(Real),
+    RollLeft(Real),
+    Width(Real),
+    Scale(Real),
+}
+
+fn command() -> impl Strategy<Value = Command> {
+    prop_oneof![
+        (0.01f32..3.0).prop_map(Command::Forward),
+        (-360.0f32..360.0).prop_map(Command::Left),
+        (-360.0f32..360.0).prop_map(Command::Down),
+        (-360.0f32..360.0).prop_map(Command::RollLeft),
+        (0.001f32..1.0).prop_map(Command::Width),
+        (0.1f32..4.0).prop_map(Command::Scale),
+    ]
+}
+
+fn apply(turtle: &mut Turtle<MeasureDrawer>, command: Command) {
+    match command {
+        Command::Forward(length) => turtle.forward(length).unwrap(),
+        Command::Left(angle) => turtle.left(angle),
+        Command::Down(angle) => turtle.down(angle),
+        Command::RollLeft(angle) => turtle.roll_left(angle),
+        Command::Width(width) => turtle.set_width(width).unwrap(),
+        Command::Scale(scale) => turtle.scale_uniform(scale),
+    }
 }
 
 fn direction() -> impl Strategy<Value = Vec3> {
@@ -86,6 +120,73 @@ proptest! {
             prop_assert!(frame.is_orthonormal(1e-3), "{frame:?}");
             prop_assert_eq!(frame.position, *sample);
         }
+    }
+
+    /// No command sequence skews the turtle's frame.
+    ///
+    /// This is the invariant the whole modelling layer rests on: every organ
+    /// is placed by the frame, so a frame that is not orthonormal is a plant
+    /// whose leaves are sheared.
+    #[test]
+    fn a_turtle_frame_stays_orthonormal(
+        commands in prop::collection::vec(command(), 1..200)
+    ) {
+        let mut turtle = Turtle::new(MeasureDrawer::new());
+        for command in commands {
+            apply(&mut turtle, command);
+            prop_assert!(
+                turtle.is_valid(),
+                "{command:?} skewed the frame: {:?}",
+                turtle.state().frame
+            );
+        }
+    }
+
+    /// A balanced `push`/`pop` restores the state exactly, whatever happens
+    /// in between.
+    #[test]
+    fn a_balanced_push_and_pop_restores_the_state(
+        commands in prop::collection::vec(command(), 1..60)
+    ) {
+        let mut turtle = Turtle::new(MeasureDrawer::new());
+        // Somewhere other than the initial state, so a restore that quietly
+        // resets would be caught too.
+        turtle.left(23.0);
+        turtle.forward(0.7).unwrap();
+        turtle.set_width(0.3).unwrap();
+
+        let before = turtle.state().clone();
+        turtle.push();
+        for command in commands {
+            apply(&mut turtle, command);
+        }
+        turtle.pop().unwrap();
+
+        prop_assert_eq!(turtle.state().frame, before.frame);
+        prop_assert_eq!(turtle.state().width, before.width);
+        prop_assert_eq!(turtle.state().scale, before.scale);
+        prop_assert_eq!(turtle.state().draw.color, before.draw.color);
+        prop_assert_eq!(turtle.state().section_resolution, before.section_resolution);
+    }
+
+    /// Nesting pushes and pops in balanced pairs restores the state too, and
+    /// the stack ends where it started.
+    #[test]
+    fn nested_pushes_unwind_to_the_start(depth in 1usize..12) {
+        let mut turtle = Turtle::new(MeasureDrawer::new());
+        let before = turtle.state().clone();
+        for i in 0..depth {
+            turtle.push();
+            turtle.left(17.0 * i as Real);
+            turtle.forward(0.1).unwrap();
+        }
+        prop_assert_eq!(turtle.stack_depth(), depth);
+        for _ in 0..depth {
+            turtle.pop().unwrap();
+        }
+        prop_assert!(turtle.stack_is_empty());
+        prop_assert_eq!(turtle.state().frame, before.frame);
+        prop_assert!(turtle.pop().is_err(), "the stack should now be empty");
     }
 
     /// A bounding box contains every point it was built from.

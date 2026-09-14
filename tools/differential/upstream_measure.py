@@ -184,6 +184,310 @@ CASES: dict[str, Callable[[int, int], Any]] = {
 }
 
 
+# --- Phase D (#20): the turtle ------------------------------------------------
+#
+# A turtle case is a *program*, not a geometry: the same command sequence is
+# driven through upstream's `PglTurtle` and through the port's, and what is
+# compared is the scene each produced — how many shapes, of what kinds, with
+# what meshes — plus the frame the turtle ended in.
+#
+# The section resolution is pinned so both sides sweep the same number of
+# facets; it is the turtle's own knob, not the discretizer's.
+TURTLE_SECTION_RESOLUTION = 8
+
+
+def square_section() -> Any:
+    """A closed square profile — the mint-stem cross-section."""
+    return pgl.Polyline2D(
+        pgl.Point2Array(
+            [
+                pgl.Vector2(-1.0, -1.0),
+                pgl.Vector2(1.0, -1.0),
+                pgl.Vector2(1.0, 1.0),
+                pgl.Vector2(-1.0, 1.0),
+                pgl.Vector2(-1.0, -1.0),
+            ]
+        )
+    )
+
+
+def guide_arc(radius: float = 1.0, segments: int = 64) -> Any:
+    """A quarter circle starting along +Z, the heading a guide assumes."""
+    points = []
+    for i in range(segments + 1):
+        t = (math.pi / 2) * i / segments
+        points.append(
+            pgl.Vector3(radius * (1.0 - math.cos(t)), 0.0, radius * math.sin(t))
+        )
+    return pgl.Polyline(pgl.Point3Array(points))
+
+
+def _straight(t: Any) -> None:
+    t.setWidth(0.1)
+    t.F(1.0)
+
+
+def _tapered(t: Any) -> None:
+    t.setWidth(0.1)
+    t.F(1.0, 0.05)
+    t.F(1.0, 0.02)
+
+
+def _branching(t: Any) -> None:
+    t.setWidth(0.05)
+    t.F(1.0)
+    t.push()
+    t.left(35.0)
+    t.F(0.7, 0.02)
+    t.pop()
+    t.push()
+    t.right(35.0)
+    t.rollL(90.0)
+    t.F(0.7, 0.02)
+    t.pop()
+    t.down(20.0)
+    t.F(0.5, 0.03)
+
+
+def _primitives(t: Any) -> None:
+    t.setWidth(0.2)
+    t.sphere(0.3)
+    t.f(1.0)
+    t.circle(0.25)
+    t.f(1.0)
+    t.quad(0.6, 0.2)
+    t.f(1.0)
+    t.box(0.6, 0.2)
+
+
+def _generalized_cylinder(t: Any) -> None:
+    t.setWidth(0.06)
+    t.startGC()
+    for _ in range(20):
+        t.left(3.0)
+        t.F(0.1)
+    t.stopGC()
+
+
+def _generalized_cylinder_branch(t: Any) -> None:
+    t.setWidth(0.05)
+    t.startGC()
+    t.F(0.5)
+    t.push()
+    t.left(40.0)
+    t.F(0.4)
+    t.F(0.4)
+    t.pop()
+    t.F(0.5)
+    t.stopGC()
+
+
+def _polygon(t: Any) -> None:
+    t.startPolygon()
+    t.polygonPoint()
+    for _ in range(4):
+        t.left(72.0)
+        t.f(0.3)
+        t.polygonPoint()
+    t.stopPolygon(False)
+
+
+def _cross_section(t: Any) -> None:
+    t.setWidth(0.1)
+    t.setCrossSection(square_section(), True)
+    t.F(1.0)
+    t.F(1.0, 0.05)
+
+
+def _tropism(t: Any) -> None:
+    t.setWidth(0.04)
+    t.setHead(pgl.Vector3(1, 0, 0), pgl.Vector3(0, 0, 1))
+    t.setTropism(0.0, 0.0, -1.0)
+    t.elasticity = 0.5
+    for _ in range(12):
+        t.F(0.1)
+
+
+def _guide(t: Any) -> None:
+    t.setWidth(0.04)
+    arc = guide_arc()
+    length = arc.getLength()
+    t.setGuide(arc, length)
+    t.nF(length, length / 10.0)
+
+
+def _guided_sweep(t: Any) -> None:
+    """What `sweep` is: a guide, a cross-section, and `nF` along it.
+
+    Upstream's `Turtle::sweep` is exactly that composition, but this build's
+    Python bindings expose neither `sweep` (no overload accepts a `Polyline`
+    path) nor the radius-varying `nF`, so the composition is driven directly
+    at a constant width. The port's `sweep` and its radius profile are
+    covered by `tests/turtle.rs`.
+    """
+    t.setWidth(0.05)
+    arc = guide_arc()
+    length = arc.getLength()
+    t.setGuide(arc, length)
+    t.setCrossSection(pgl.Polyline2D.Circle(1.0, TURTLE_SECTION_RESOLUTION), True)
+    t.nF(length, length / 8.0)
+
+
+def _plant(t: Any) -> None:
+    """A plant-scale program: a swept trunk, branches, leaves, gravitropism."""
+    t.setWidth(0.08)
+    t.setTropism(0.0, 0.0, -1.0)
+    t.elasticity = 0.15
+    t.startGC()
+    for i in range(6):
+        t.F(0.3, 0.08 - 0.01 * i)
+        t.rollL(60.0)
+    t.stopGC()
+    for i in range(3):
+        t.push()
+        t.left(40.0)
+        t.setWidth(0.03)
+        t.startGC()
+        t.F(0.25)
+        t.F(0.25)
+        t.stopGC()
+        t.push()
+        t.down(30.0)
+        t.surface("l", 0.4)
+        t.pop()
+        t.pop()
+        t.rollL(120.0)
+        t.f(0.1)
+
+
+TURTLE_CASES: dict[str, Callable[[Any], None]] = {
+    "turtle_straight": _straight,
+    "turtle_tapered": _tapered,
+    "turtle_branching": _branching,
+    "turtle_primitives": _primitives,
+    "turtle_gc": _generalized_cylinder,
+    "turtle_gc_branch": _generalized_cylinder_branch,
+    "turtle_polygon": _polygon,
+    "turtle_cross_section": _cross_section,
+    "turtle_tropism": _tropism,
+    "turtle_guide": _guide,
+    "turtle_guided_sweep": _guided_sweep,
+    "turtle_plant": _plant,
+}
+
+
+def leaf_geometry(geometry: Any) -> Any:
+    """The shape under however many transformations placed it.
+
+    Both sides wrap a drawn primitive in the transformations that put it where
+    the turtle stood, and neither side's wrapping is what this harness is
+    about: what matters is that the same *kind* of shape came out, with the
+    same mesh in the same place.
+    """
+    while hasattr(geometry, "geometry") and not isinstance(geometry, pgl.Group):
+        geometry = geometry.geometry
+    return geometry
+
+
+def measure_turtle(program: Callable[[Any], None]) -> dict[str, Any]:
+    """Run one turtle program upstream and record what it drew."""
+    turtle = pgl.PglTurtle()
+    turtle.sectionResolution = TURTLE_SECTION_RESOLUTION
+    turtle.setDefaultCrossSection()
+    program(turtle)
+    turtle.stop()
+    scene = turtle.getScene()
+
+    shapes: list[dict[str, Any]] = []
+    total_triangles = 0
+    total_area = 0.0
+    for shape in scene:
+        geometry = shape.geometry
+        kind = type(leaf_geometry(geometry)).__name__
+
+        discretizer = pgl.Discretizer()
+        if not geometry.apply(discretizer):
+            raise RuntimeError(f"upstream failed to discretise a {kind}")
+        mesh = discretizer.result
+
+        triangles = pgl.tesselate(geometry)
+        area = 0.0
+        for i in range(triangles.indexListSize()):
+            index = triangles.indexAt(i)
+            corners = [triangles.pointList[index[j]] for j in range(3)]
+            area += pgl.surface(corners[0], corners[1], corners[2])
+
+        bbox_computer = pgl.BBoxComputer(pgl.Discretizer())
+        geometry.apply(bbox_computer)
+        bbox = bbox_computer.boundingbox
+
+        # The first swept ring, for the skew defect the Phase D harness found:
+        # upstream crosses `Extrusion::InitialNormal` with the axis tangent
+        # without orthogonalising or renormalising, so the first ring of a
+        # sweep that starts after a turn is an ellipse squashed by the cosine
+        # of that turn. Recorded as the spread of the ring's radii, which is
+        # `(r, r)` for a circular section drawn correctly.
+        first_ring = (0.0, 0.0)
+        if kind == "Extrusion":
+            # One ring per axis point, so the ring size follows from the mesh
+            # rather than from the section resolution — a section with its own
+            # stride (a square, say) has fewer points than that.
+            rings = len(leaf_geometry(geometry).axis.pointList)
+            ring_size = len(mesh.pointList) // max(rings, 1)
+            ring = list(mesh.pointList)[:ring_size]
+            if ring_size >= 3:
+                centre = [
+                    sum(p[axis] for p in ring) / len(ring) for axis in range(3)
+                ]
+                radii = [
+                    math.sqrt(sum((p[axis] - centre[axis]) ** 2 for axis in range(3)))
+                    for p in ring
+                ]
+                first_ring = (min(radii), max(radii))
+
+        total_triangles += triangles.indexListSize()
+        total_area += area
+        shapes.append(
+            {
+                "kind": kind,
+                "points": len(mesh.pointList),
+                "triangles": triangles.indexListSize(),
+                "area": area,
+                "bbox_min": [
+                    bbox.lowerLeftCorner.x,
+                    bbox.lowerLeftCorner.y,
+                    bbox.lowerLeftCorner.z,
+                ],
+                "bbox_max": [
+                    bbox.upperRightCorner.x,
+                    bbox.upperRightCorner.y,
+                    bbox.upperRightCorner.z,
+                ],
+                "first_ring_min": first_ring[0],
+                "first_ring_max": first_ring[1],
+            }
+        )
+
+    position, heading, left, up = (
+        turtle.getPosition(),
+        turtle.getHeading(),
+        turtle.getLeft(),
+        turtle.getUp(),
+    )
+    return {
+        "section_resolution": TURTLE_SECTION_RESOLUTION,
+        "shapes": shapes,
+        "shape_count": len(shapes),
+        "triangles": total_triangles,
+        "area": total_area,
+        "final_position": [position.x, position.y, position.z],
+        "final_heading": [heading.x, heading.y, heading.z],
+        "final_left": [left.x, left.y, left.z],
+        "final_up": [up.x, up.y, up.z],
+        "final_width": turtle.getWidth(),
+    }
+
+
 # Curves are not meshes: a `Discretizer` reduces them to a `Polyline`, so there
 # is no area, volume or face count to compare. What there is instead is the
 # thing that matters — the sampled points, and the tangents at them.
@@ -464,6 +768,15 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001 - report, do not mask
                 failures[key] = f"{type(exc).__name__}: {exc}"
 
+    turtles: dict[str, Any] = {}
+    for name, program in TURTLE_CASES.items():
+        if args.only and name != args.only:
+            continue
+        try:
+            turtles[name] = measure_turtle(program)
+        except Exception as exc:  # noqa: BLE001 - report, do not mask
+            failures[name] = f"{type(exc).__name__}: {exc}"
+
     curves: dict[str, Any] = {}
     for name, build_curve in CURVE_CASES.items():
         if args.only and name != args.only:
@@ -483,6 +796,7 @@ def main() -> int:
         "slice_counts": list(SLICE_COUNTS),
         "cases": results,
         "curves": curves,
+        "turtles": turtles,
     }
     if failures:
         document["failures"] = failures
@@ -491,7 +805,10 @@ def main() -> int:
         json.dump(document, handle, indent=2, sort_keys=True)
         handle.write("\n")
 
-    print(f"wrote {len(results)} measurements and {len(curves)} curves to {args.out}")
+    print(
+        f"wrote {len(results)} measurements, {len(curves)} curves and "
+        f"{len(turtles)} turtle programs to {args.out}"
+    )
     for key, why in failures.items():
         print(f"  FAILED {key}: {why}", file=sys.stderr)
     return 1 if failures else 0

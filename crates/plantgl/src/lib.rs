@@ -29,9 +29,45 @@
 //! - **C** — Bézier and NURBS curves and patches ([`scenegraph::curve`]) and
 //!   the generalized cylinder, [`Extrusion`], which sweeps a 2D cross-section
 //!   along a 3D axis under rotation-minimising frames.
+//! - **D** — the 3D turtle ([`modelling`]): the cpfg/L-studio command set,
+//!   generalized cylinders, polygons, cross-sections, guides and tropism, over
+//!   three drawers — a [`Scene`], one merged [`TriangleSet`] per appearance, or
+//!   nothing but metrics.
 //!
-//! The turtle and the L-system driver are Phase D. See
-//! `docs/design/08-plantgl-port.md`.
+//! The L-system driver that feeds the turtle lives in `crates/botany`; wiring
+//! it up is Phase E. See `docs/design/08-plantgl-port.md`.
+//!
+//! A plant, in the shape an L-system driver would produce it: one swept axis
+//! per branch, a leaf hung off each.
+//!
+//! ```
+//! use plantgl::modelling::{MeasureDrawer, Turtle};
+//!
+//! let mut turtle = Turtle::upright(MeasureDrawer::new());
+//! turtle.set_tropism(-plantgl::math::Vec3::y()); // gravity, in a Y-up world
+//! turtle.set_elasticity(0.2);
+//! turtle.set_width(0.05).unwrap();
+//!
+//! turtle.start_gc();
+//! for _ in 0..8 {
+//!     turtle.forward_tapered(0.15, turtle.width() * 0.92).unwrap();
+//!     turtle.roll_left(45.0);
+//! }
+//! turtle.stop_gc().unwrap();
+//!
+//! for _ in 0..3 {
+//!     turtle.push();
+//!     turtle.left(40.0);
+//!     turtle.surface("l", 0.3).unwrap();
+//!     turtle.pop().unwrap();
+//!     turtle.roll_left(120.0);
+//! }
+//!
+//! // Harvest yield, without ever building a mesh.
+//! let measures = turtle.drawer().measures();
+//! assert_eq!(measures.segment_count, 8);
+//! assert!(measures.surface_area > 0.0 && measures.volume > 0.0);
+//! ```
 //!
 //! ```
 //! use plantgl::algo::{discretize, measure, tessellate};
@@ -111,6 +147,7 @@ pub mod algo;
 pub mod codec;
 pub mod error;
 pub mod math;
+pub mod modelling;
 pub mod scenegraph;
 
 pub use algo::{
@@ -118,6 +155,9 @@ pub use algo::{
     BoundingBox, BoundingSphere, DiscretizeCtx, Discretizer, Explicit,
 };
 pub use error::{Error, Result};
+pub use modelling::{
+    MeasureDrawer, MeshDrawer, SceneDrawer, SurfaceLibrary, Turtle, TurtleDrawer, TurtleState,
+};
 pub use math::Frame;
 pub use scenegraph::{
     Appearance, AppearanceRef, BezierCurve, BezierCurve2D, BezierPatch, Box3, Color3, Color4, Cone,
