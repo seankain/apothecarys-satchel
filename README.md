@@ -29,12 +29,25 @@ crates/
   world/         - World graph and scene transitions (stub)
   dialogue/      - YarnSpinner parser and runner (stub)
   scripting/     - Lua scripting integration (stub)
-  botany/        - Plant genetics and L-system generation (stub)
+  botany/        - Plant genetics, phenotype expression, L-systems, and the
+                   turtle driver that feeds plantgl (MIT)
   plantgl/       - Geometry and turtle modelling, ported from PlantGL (CeCILL-C)
   garden/        - Garden plot management (stub)
   persistence/   - Save/load system (stub)
   tools/         - Editor tooling (stub)
 ```
+
+Plant generation runs `botany` → `plantgl`:
+
+```
+PlantGenotype → PlantPhenotype → LSystem → [LSymbol] → plantgl::Scene → Fyrox
+ genetics.rs     phenotype.rs    lsystem.rs        interpret.rs    fyrox_bridge.rs
+```
+
+`botany/src/fyrox_bridge.rs` is behind a `fyrox` feature, off by default, so
+the headless crates that depend on `botany` never pull the engine in.
+`docs/design/08-plantgl-port.md` covers the port; `docs/design/04-apothecary-botany.md`
+covers the plant pipeline.
 
 ## Licensing
 
@@ -52,11 +65,25 @@ is therefore governed by the **CeCILL-C** license — see
 
 CeCILL-C Article 5.3.3 permits Derivative Software under another license
 provided the Article 6.4 notice of rights is carried and the port's source
-stays available. `THIRD-PARTY-LICENSES` at the repository root is that notice
-and **must ship with release builds**; it carries the CeCILL-C text, the
-CIRAD/INRIA/INRA copyright notices, the warranty and liability notice and a
-pointer to the port's source. There is no LGPL §4 analogue, so Rust's static
-linking is not a problem.
+stays available. `THIRD-PARTY-LICENSES` at the repository root is that notice;
+it carries the CeCILL-C text, the CIRAD/INRIA/INRA copyright notices, the
+warranty and liability notice and a pointer to the port's source. There is no
+LGPL §4 analogue, so Rust's static linking is not a problem.
+
+It **ships with every build**, not only at release time: `crates/game/build.rs`
+copies it and the root `LICENSE` next to the executable, and
+`crates/game/tests/licensing.rs` fails if either is missing or has drifted from
+the repository copy. So after `cargo build --release -p apothecarys-game`:
+
+```
+target/release/
+  game
+  LICENSE
+  THIRD-PARTY-LICENSES
+```
+
+A packaging step that only runs at release time is a step that is discovered to
+be missing at release time; `cargo test` catches this one instead.
 
 Work using PlantGL is asked to cite:
 
@@ -99,7 +126,18 @@ cargo test -p plantgl
 
 # Refresh the OBJ golden snapshots after a deliberate change, then read the diff
 UPDATE_GOLDEN=1 cargo test -p plantgl --test golden
-UPDATE_GOLDEN=1 cargo test -p apothecarys-botany --test golden_pre_plantgl
+UPDATE_GOLDEN=1 cargo test -p apothecarys-botany --test golden
+```
+
+`crates/botany/tests/golden/pre-plantgl/` holds the snapshots taken *before*
+the PlantGL port replaced the plant generator. They are kept, not asserted, so
+the change in geometry stays reviewable; do not update them.
+
+The per-plant performance budget is enforced by a test, and its timings only
+mean anything in a release build:
+
+```bash
+cargo test --release -p apothecarys-botany --test budget
 ```
 
 ## Linting
@@ -124,6 +162,7 @@ The game is developed in incremental phases:
 - **Phase 6**: Save/load, hub integration, UI
 - **Phase 7**: Editor tooling
 - **Phase 8**: PlantGL port — `crates/plantgl` replaces the hand-rolled plant
-  mesh generation. See `docs/design/08-plantgl-port.md`.
+  mesh generation. Complete: stems are swept generalized cylinders and organs
+  are real surfaces. See `docs/design/08-plantgl-port.md`.
 
 See `docs/design/07-task-breakdown.md` for the full task dependency graph.

@@ -109,15 +109,24 @@ apothecarys-satchel/
 │   │   │   └── interaction.rs    # Pickup, use, give mechanics
 │   │   └── Cargo.toml
 │   │
-│   ├── botany/                   # Plant genetics and mesh generation
+│   ├── botany/                   # Plant genetics and the L-system driver (MIT)
 │   │   ├── src/
 │   │   │   ├── lib.rs
 │   │   │   ├── genetics.rs       # Genotype representation
 │   │   │   ├── phenotype.rs      # Genotype → visual trait mapping
 │   │   │   ├── lsystem.rs        # L-system string rewriting
-│   │   │   ├── turtle.rs         # Turtle interpretation → mesh
-│   │   │   ├── mesh_gen.rs       # Final mesh construction
+│   │   │   ├── interpret.rs      # L-symbol → plantgl turtle dispatch
+│   │   │   ├── surfaces.rs       # Procedural leaf/petal/fruit templates
+│   │   │   ├── lod.rs            # Quality tiers and triangle budgets
+│   │   │   ├── fyrox_bridge.rs   # plantgl geometry → Fyrox nodes (feature)
+│   │   │   ├── mesh_gen.rs       # Re-export facade over interpret.rs
 │   │   │   └── stat_mapping.rs   # Genetics → gameplay effect mapping
+│   │   └── Cargo.toml
+│   │
+│   ├── plantgl/                  # Geometry and turtle modelling (CeCILL-C)
+│   │   ├── src/                  # A port of openalea/plantgl; see
+│   │   │                         # docs/design/08-plantgl-port.md
+│   │   ├── LICENSE               # CeCILL-C v1 — NOT the workspace's MIT
 │   │   └── Cargo.toml
 │   │
 │   ├── garden/                   # Hub garden management

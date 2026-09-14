@@ -521,15 +521,17 @@ render one genotype at three quality tiers.
 
 | File | Change |
 |---|---|
-| `crates/botany/src/turtle.rs` | **Deleted.** Its `Vec3`, `rotate_around_axis` and `TurtleInterpreter` are superseded by `plantgl::math` and `plantgl::modelling::turtle`. Tests move to `interpret.rs` and to `plantgl`'s turtle tests. |
-| `crates/botany/src/interpret.rs` | **New.** `interpret(symbols, phenotype) -> plantgl::Scene`. |
-| `crates/botany/src/mesh_gen.rs` | Gutted. `PlantMeshData` becomes a thin facade *only* so `tools`/`game` keep compiling during migration; `build_stem_mesh` and the hand-rolled OBJ/MTL writers go in favour of `plantgl::codec::obj`. Removed at T8.12. |
-| `crates/botany/src/lsystem.rs` | Extended: `StartGC`, `StopGC`, `SetCrossSection`, `SetTropism`, `Surface`. Rewriting engine unchanged. |
-| `crates/botany/src/phenotype.rs` | Extended: cross-section profile, taper curve, tropism elasticity, axis curvature, LOD tier. |
-| `crates/botany/src/fyrox_bridge.rs` | **New.** `TriangleSet` → `SurfaceData`; appearance → `Material`. |
+| `crates/botany/src/turtle.rs` | **Deleted** (T8.10). Its `Vec3`, `rotate_around_axis` and `TurtleInterpreter` are superseded by `plantgl::math` and `plantgl::modelling::turtle`; its tests moved to `plantgl`'s turtle tests. |
+| `crates/botany/src/interpret.rs` | **New.** Generic over `TurtleDrawer`: `build_scene`, `build_batches` and `measure` over one derived string. |
+| `crates/botany/src/mesh_gen.rs` | Reduced to a re-export facade over `interpret`. `PlantMeshData`, `build_stem_mesh` and the hand-rolled OBJ/MTL writers are gone in favour of `PlantModel` and `plantgl::codec::obj`. |
+| `crates/botany/src/lsystem.rs` | Extended: `StartGC`, `StopGC`, `SetCrossSection`, `SetTropism`, `Surface`. Rewriting engine unchanged; the growth rule now continues its axis instead of ending in two pushed branches. |
+| `crates/botany/src/phenotype.rs` | Extended: cross-section profile, taper curve, tropism elasticity, axis curvature, petal shape, LOD tier. No new gene — see the note in `express_phenotype`. |
+| `crates/botany/src/surfaces.rs` | **New.** The organ library: Bézier-patch leaves and petals, sphere fruit, and the stem cross-sections. |
+| `crates/botany/src/lod.rs` | **New.** The three tiers and their budgets. |
+| `crates/botany/src/fyrox_bridge.rs` | **New**, behind a `fyrox` feature so `garden` and `persistence` stay headless. `TriangleSet` → `SurfaceData`; appearance → `Material`. |
 | `crates/tools/src/plant_preview.rs` | Carries a `plantgl::Scene`; reports real surface area and volume. |
 | `crates/tools/src/bin/plant_previewer.rs` | Builds nodes through the bridge. |
-| `crates/game/src/*` | Garden/hub spawn path only. |
+| `crates/game/src/garden_scene.rs` | **New.** The plot grid and its plants, seeded from each plant's stored `Uuid`, tier chosen per plot by distance. `GamePlugin::enter_garden` builds it. |
 | `Cargo.toml` (workspace) | Add `crates/plantgl`; add `nalgebra = "0.33"` to `workspace.dependencies`. |
 | `README.md` | Crate table, plus the mixed-licensing note. |
 
@@ -550,7 +552,7 @@ Tracked as GitHub issues; this table is the index.
 | B — Primitives | [#18](https://github.com/seankain/apothecarys-satchel/issues/18) | T8.4–T8.5: parametric primitives, discretizer, tessellator, measurement | ~1.5 weeks | **done** |
 | C — Curves | [#19](https://github.com/seankain/apothecarys-satchel/issues/19) | T8.6–T8.7: Bézier/NURBS, patches, `Extrusion` | ~1.5 weeks | **done** |
 | D — Turtle | [#20](https://github.com/seankain/apothecarys-satchel/issues/20) | T8.8–T8.9: turtle core, GC, polygons, guides, tropism | ~1.5 weeks | **done** |
-| E — Integration | [#21](https://github.com/seankain/apothecarys-satchel/issues/21) | T8.10–T8.12: rewire botany, Fyrox bridge, doc reconciliation | ~1 week | not started |
+| E — Integration | [#21](https://github.com/seankain/apothecarys-satchel/issues/21) | T8.10–T8.12: rewire botany, Fyrox bridge, doc reconciliation | ~1 week | **done** |
 | F — Optional | [#22](https://github.com/seankain/apothecarys-satchel/issues/22) | T8.13–T8.17: space colonization, PLY/glTF, hulls, instancing | as needed | not started |
 
 **Core total: ~6.5 weeks**, ~6 500 lines of Rust excluding tests. Upstream's C++
@@ -721,6 +723,59 @@ Twelve turtle programs are compared against upstream end to end — shapes,
 kinds, meshes, areas, boxes and the frame the turtle ended in — including one
 plant-scale program. See `tools/differential/README.md`.
 
+### What Phase E actually landed
+
+Where the port pays off on screen. `crates/botany` runs entirely through
+`plantgl`, and a stem is a swept surface rather than a stack of cans.
+
+- `botany/src/interpret.rs` — the `LSymbol` → turtle dispatch, generic over
+  `TurtleDrawer`. One derived string becomes a `Scene`, a merged mesh per
+  appearance, or nothing but measurements, without being re-derived.
+- `botany/src/surfaces.rs` — the organ library, procedurally generated: five
+  leaf outlines and three petal outlines as 4×4 Bézier patches, four fruit
+  bodies as scaled spheres, and square, triangular and fluted stem profiles.
+  The existing `leaf_mesh_index` / `fruit_mesh_index` genes index into it.
+- `botany/src/lod.rs` — three tiers, each fixing the derivation depth, the
+  section resolution, the patch strides and whether organs are drawn at all.
+- `botany/src/fyrox_bridge.rs` — `TriangleSet` → `SurfaceData` and appearance
+  → `Material`, behind a feature flag. Batches are merged by appearance
+  *before* conversion, so a plant is at most four draw calls.
+- `game/src/garden_scene.rs` — the plot grid and its plants, seeded from each
+  plant's stored `Uuid` so a garden looks the same every time it is entered.
+
+Three things came out of the rewiring that were not on the T8.10 list:
+
+1. **The flower and fruit rules had never fired.** `find_matching_rule`
+   accumulates the matching rules' probabilities in order, and both sat behind
+   a growth rule of probability 1.0 — so no plant in the game had ever grown a
+   flower or set fruit. They are ordered first now, and the growth rule takes
+   the remainder.
+2. **A fertile rule ended the axis**, which with the ordering fixed would have
+   truncated a fifth of all plants to a single half-internode with a blossom on
+   it — the flower rule can fire on the axiom's own first apex. Both rules hang
+   their organ off a stalk inside `Push`/`Pop` and then carry on with an
+   `Apex`, which is also what an axillary inflorescence actually is.
+3. **The growth rule had to continue its axis** for the sweep to be worth
+   anything. Ending every apex in two pushed branches leaves each `Forward`
+   alone between a `Push` and a `Pop`, so every generalized cylinder would have
+   been two rings long and the stems would have looked exactly as they did
+   before. One lateral inside `Push`/`Pop` and a bare `Apex` after it keeps the
+   apex count doubling while giving each axis a run of segments to sweep.
+
+`PlantPhenotype` gained four stem traits with no gene of their own — the
+cross-section profile, the taper curve, the tropism elasticity and the axis
+curvature — plus a petal shape index and an LOD tier. Widening
+`PlantGenotype` would have invalidated every save and every stored breeding
+pair, so each rides the gene nearest it in meaning; `express_phenotype`
+documents the mapping at the call site.
+
+The golden OBJs taken before T8.10 are kept at
+`crates/botany/tests/golden/pre-plantgl/` and a post-port set is asserted
+alongside. Face counts across the five seeds go 48 → 330, 945 → 2 168,
+434 → 1 658, 465 → 2 576 and 225 → 1 340: real leaf surfaces in place of one
+marker triangle each, swept tapering axes in place of ring pairs, texture
+coordinates, and petals and fruit appearing at all for the first time.
+
 ---
 
 ## Testing strategy
@@ -772,6 +827,25 @@ organ templates — and, since `Arc` is atomic and there is no FFI boundary,
 **`rayon` per plot is available**. A 12-plot garden at 15 ms each is ~180 ms
 serially and trivially parallelised.
 
+**Measured**, on the heaviest plant of 300 seeds, release build
+(`cargo test --release -p apothecarys-botany --test budget`):
+
+| Operation | Budget | Measured |
+|---|---|---|
+| Derivation | < 1 ms | 0.014 ms |
+| Turtle interpretation + GC construction | < 3 ms | 0.23 ms |
+| Discretise + tessellate + merge, hub LOD | < 10 ms | 4.08 ms |
+| **Total per plant, hub LOD** | **< 15 ms** | **4.3 ms** |
+| Triangles, hub / distant / icon | < 12 000 / 1 500 / 400 | 7 280 / 992 / 84 |
+
+`crates/botany/tests/budget.rs` asserts all of it. Its timings scale by 40× in
+a debug build, where the meshing runs about that much slower, so the release
+invocation above is the real gate.
+
+None of the levers was needed. Two were spent on quality instead: the hub tier
+runs at ten section slices rather than upstream's default eight, and organ
+patches are sampled 5×4 rather than the 5×3 the first pass used.
+
 ---
 
 ## Risks
@@ -783,9 +857,9 @@ serially and trivially parallelised.
 | **NURBS and sweeps (Phase C)** | Medium | Much lower than under clean-room: we translate working code and can diff against the original. The differential harness above is the safety net |
 | **`Tapered` folded into an affine matrix** | Medium | Called out in the design above; covered by a dedicated test |
 | **`f32` precision in knot arithmetic** | Low | `f64` internally in `spline.rs`, downcast at the boundary; explicit test on a 200-control-point curve |
-| **Regression in existing plant visuals** | Medium | Golden OBJs captured from the current generator before T8.10 |
+| **Regression in existing plant visuals** | Medium | Golden OBJs captured before T8.10 and kept at `crates/botany/tests/golden/pre-plantgl/`; the post-port set is asserted alongside |
 | **Triangle-count blowup** | Medium | LOD tiers are a T8.11 deliverable, not an afterthought; the budget is enforced by a test |
-| **Big-bang migration** | Low | `PlantMeshData` stays a facade through Phase E; deleted at T8.12 |
+| **Big-bang migration** | Low | Landed as T8.10+T8.11 in one change and T8.12 in another, each green: `PlantMeshData` never needed to survive as a shim because nothing was ever mid-migration |
 | **Upstream divergence** | Low | Record the upstream commit each file was translated from, so a future rebase is a diff rather than an archaeology project |
 
 ---
