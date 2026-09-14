@@ -328,7 +328,8 @@ crates/plantgl/
       discretize.rs tessellate.rs bbox.rs bsphere.rs measure.rs
       matrix.rs merge.rs normals.rs
     modelling/
-      turtle.rs param.rs path.rs drawer.rs scene_drawer.rs mesh_drawer.rs tropism.rs
+      turtle.rs param.rs path.rs tropism.rs drawer.rs geometry.rs
+      scene_drawer.rs mesh_drawer.rs measure_drawer.rs
     codec/{mod,obj,ply}.rs
   tests/
     golden/ analytic.rs turtle.rs determinism.rs
@@ -548,7 +549,7 @@ Tracked as GitHub issues; this table is the index.
 | A — Foundation | [#17](https://github.com/seankain/apothecarys-satchel/issues/17) | T8.1–T8.3: crate + licensing, math/frames, scene graph, OBJ + golden harness | ~1 week | **done** |
 | B — Primitives | [#18](https://github.com/seankain/apothecarys-satchel/issues/18) | T8.4–T8.5: parametric primitives, discretizer, tessellator, measurement | ~1.5 weeks | **done** |
 | C — Curves | [#19](https://github.com/seankain/apothecarys-satchel/issues/19) | T8.6–T8.7: Bézier/NURBS, patches, `Extrusion` | ~1.5 weeks | **done** |
-| D — Turtle | [#20](https://github.com/seankain/apothecarys-satchel/issues/20) | T8.8–T8.9: turtle core, GC, polygons, guides, tropism | ~1.5 weeks | not started |
+| D — Turtle | [#20](https://github.com/seankain/apothecarys-satchel/issues/20) | T8.8–T8.9: turtle core, GC, polygons, guides, tropism | ~1.5 weeks | **done** |
 | E — Integration | [#21](https://github.com/seankain/apothecarys-satchel/issues/21) | T8.10–T8.12: rewire botany, Fyrox bridge, doc reconciliation | ~1 week | not started |
 | F — Optional | [#22](https://github.com/seankain/apothecarys-satchel/issues/22) | T8.13–T8.17: space colonization, PLY/glTF, hulls, instancing | as needed | not started |
 
@@ -648,6 +649,77 @@ records an `inward_faces` count for every case.
 profiles (`ProfileInterpolation`), which is an interpolation problem rather than
 an evaluation one, so the spline evaluators here do not supply it. Degree 1 is
 translated; higher degrees report `Error::Unsupported`.
+
+### What Phase D actually landed
+
+The turtle, and the three drawers the FFI route could not have offered.
+
+- `modelling/param.rs` — `TurtleState` (upstream's `TurtleParam`, with the
+  frame delegated to Phase A's `Frame`), `DrawParams`, `TextureState` and
+  `TurtleDefaults`.
+- `modelling/turtle.rs` — the command set: `f`/`F`/`nF`; `left`/`right`/`up`/
+  `down`/`rollL`/`rollR`/`iRollL`/`iRollR`/`turnAround`; `rollToVert`/
+  `rollToHorizontal`; `setHead`/`eulerAngles`/`transform`; `push`/`pop`;
+  `move`/`shift`/`lineTo`/`lineRel`/`pinpoint`/`oLineTo`/`oLineRel`; the width,
+  colour, scale and texture families; `sphere`/`circle`/`box`/`quad`/`surface`;
+  `startGC`/`stopGC`; `startPolygon`/`polygonPoint`/`stopPolygon`;
+  `setCrossSection`/`setDefaultCrossSection`/`setSectionResolution`;
+  `setGuide`/`clearGuide`/`setPositionOnGuide`/`sweep`; `setTropism`/
+  `setElasticity`/the three reflections; the id family; `start`/`stop`/`reset`.
+- `modelling/tropism.rs` — `tendTo`, ABOP §2.3's "tend to", and the reflection
+  triple.
+- `modelling/path.rs` — `Turtle2DPath`/`Turtle3DPath` and `_applyGuide`, over a
+  new `ParametricCurve::arc_length_to_u_mapping` (upstream's
+  `getArcLengthToUMapping`, resampled onto the even grid this crate's
+  `QuantisedFunction` stores).
+- `modelling/drawer.rs`, `modelling/geometry.rs` — the `TurtleDrawer` trait and
+  the geometry each command draws, which is the half of `PglTurtleDrawer` that
+  decides *what shape* a command makes. Splitting the two is what lets the
+  scene drawer and the mesh drawer draw provably the same shapes.
+- `modelling/scene_drawer.rs`, `mesh_drawer.rs`, `measure_drawer.rs` — a
+  `Scene`; one merged `TriangleSet` per appearance; and surface area, volume,
+  bounding box and segment count with no allocation.
+- `SurfaceLibrary` — the named templates `surface(name, scale)` instances,
+  carrying upstream's default `"l"` leaf.
+
+Five deliberate departures, each documented where it happens:
+
+1. **`pop` on an empty stack is an error**, not a warning, as #20 asks. So is a
+   drawing command that cannot build its geometry, and a `surface` naming a
+   template the library does not hold (`Error::UnknownSurface`).
+2. **The frame is re-orthonormalised every eighth rotation.** Upstream never
+   does, and a deep derivation walks its basis out of orthonormality in `f32`.
+3. **Reflections multiply the angle, not the rotation matrix.** Upstream's
+   `down` and `rollL` write `Matrix3::axisRotation(axis, angle) * reflection`,
+   scaling the *matrix* by ±1 — which has determinant −1 and is therefore not a
+   rotation at all, and which applied to two of the three axes leaves a frame
+   that is no longer right-handed. `left` multiplies the angle, which is what a
+   mirrored turn means; the port does that in all three families.
+4. **`Extrusion::InitialNormal` is expressed as a twist angle.** The port's
+   `Extrusion` carries no initial-normal field (Phase C), so a generalized
+   cylinder locks its cross-section to the turtle's `left` with a constant
+   `orientation` — the angle from the axis-derived initial frame to that
+   `left`. It cannot come out non-unit, which is the sixth upstream defect
+   below.
+5. **`MeasureDrawer` measures the polygon each shape is drawn as**, at the
+   section resolution it was drawn with, rather than the ideal surface — which
+   is what makes it agree with the other two drawers to floating point on the
+   same program. The one exception is the sphere, where upstream's own
+   `SurfComputer` reports the closed form too.
+
+The differential harness found a **sixth upstream defect** while Phase D went
+in: `PglTurtleDrawer::generalizedCylinder` hands `Extrusion` an initial normal
+that `getInitialFrameAt` crosses with the axis tangent without orthogonalising
+or renormalising, so the first ring of every sweep that starts after a turn —
+every branch, and every step under tropism — is an ellipse squashed by the
+cosine of that turn. `turtle_gc_branch` turns 40° and its first ring measures
+`0.05 · cos 40°`. It is pinned by
+`the_skewed_first_ring_is_upstreams_alone`, which also asserts the port's own
+first ring is the cross-section it was given in every program.
+
+Twelve turtle programs are compared against upstream end to end — shapes,
+kinds, meshes, areas, boxes and the frame the turtle ended in — including one
+plant-scale program. See `tools/differential/README.md`.
 
 ---
 

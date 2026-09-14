@@ -79,6 +79,39 @@ pub fn vec3_is_valid(v: &Vec3) -> bool {
     v.x.is_finite() && v.y.is_finite() && v.z.is_finite()
 }
 
+/// The signed angle from `v1` to `v2`, as upstream's
+/// `angle(const Vector2&, const Vector2&)` — `atan2(cross, dot)`, so it
+/// carries the sense of the turn and not just its size.
+///
+/// This is what a 2D guide measures a curve's deviation with.
+#[inline]
+pub fn angle2(v1: &Vec2, v2: &Vec2) -> Real {
+    let cross = v1.x * v2.y - v1.y * v2.x;
+    cross.atan2(v1.dot(v2))
+}
+
+/// The unsigned angle between two vectors, as upstream's
+/// `angle(const Vector3&, const Vector3&)`.
+///
+/// `atan2(|v1 × v2|, v1 · v2)` rather than `acos` of the normalised dot: it
+/// stays accurate for nearly parallel and nearly opposed inputs, where the
+/// cosine is flat.
+#[inline]
+pub fn angle3(v1: &Vec3, v2: &Vec3) -> Real {
+    let cross = v1.cross(v2);
+    cross.norm().atan2(v1.dot(v2))
+}
+
+/// The angle between two vectors, signed about `axis` — upstream's
+/// `angle(const Vector3&, const Vector3&, const Vector3&)`.
+#[inline]
+pub fn angle3_about(v1: &Vec3, v2: &Vec3, axis: &Vec3) -> Real {
+    let cross = v1.cross(v2);
+    let sinus = cross.norm();
+    let sinus = if cross.dot(axis) < 0.0 { -sinus } else { sinus };
+    sinus.atan2(v1.dot(v2))
+}
+
 /// Euler rotation about Z, then Y, then X, as upstream's
 /// `Matrix3::eulerRotationZYX(Vector3(azimuth, elevation, roll))`.
 ///

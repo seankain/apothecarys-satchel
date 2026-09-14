@@ -160,6 +160,71 @@ pub trait ParametricCurve {
         }
         QuantisedFunction::from_samples(lengths, self.first_knot(), self.last_knot())
     }
+
+    /// `getArcLengthToUMapping()` — normalised arc length to parameter, the
+    /// inverse of [`ParametricCurve::u_to_arc_length_mapping`].
+    ///
+    /// This is what a turtle guide runs on: "advance 0.3 of the way along this
+    /// curve *by length*" is a question about arc length, and the curve only
+    /// answers questions about its parameter.
+    ///
+    /// Upstream builds the `(arc length, u)` pairs at its stride and hands
+    /// them to `QuantisedFunction`, which resamples them onto an evenly spaced
+    /// grid of `5 * stride` points. This crate's [`QuantisedFunction`] is
+    /// evenly spaced by construction, so the resampling is done here instead
+    /// — the same linear interpolation, in the same places.
+    fn arc_length_to_u_mapping(&self, samples: u32) -> Result<QuantisedFunction> {
+        let parameters = self.parameters(samples);
+        let points = self.discretize(samples)?;
+
+        // The cumulative length at each parameter, skipping the samples that
+        // did not advance — upstream skips those too, so a repeated point
+        // cannot produce two `u` for one arc length.
+        let mut table: Vec<(Real, Real)> = vec![(0.0, parameters[0])];
+        let mut total = 0.0;
+        for i in 1..points.len() {
+            let step = points[i - 1].distance_to(points[i]);
+            if step <= 0.0 {
+                continue;
+            }
+            total += step;
+            table.push((total, parameters[i]));
+        }
+        if total <= EPSILON || table.len() < 2 {
+            return Err(Error::degenerate(
+                "a curve of zero length has no arc-length parameterisation",
+            ));
+        }
+        for entry in &mut table {
+            entry.0 /= total;
+        }
+        // The last sample is the last knot exactly, whatever rounding did to
+        // the accumulated length.
+        if let Some(last) = table.last_mut() {
+            *last = (1.0, self.last_knot());
+        }
+
+        let count = (QuantisedFunction::SAMPLES_PER_SEGMENT * self.resolved_stride(samples)) as usize
+            + 1;
+        let mut values = Vec::with_capacity(count);
+        let mut cursor = 0;
+        for i in 0..count {
+            let s = i as Real / (count - 1) as Real;
+            while cursor + 2 < table.len() && table[cursor + 1].0 < s {
+                cursor += 1;
+            }
+            let (s0, u0) = table[cursor];
+            let (s1, u1) = table[cursor + 1];
+            let span = s1 - s0;
+            let t = if span > 0.0 {
+                ((s - s0) / span).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            values.push(u0 + (u1 - u0) * t);
+        }
+        QuantisedFunction::from_samples(values, 0.0, 1.0)
+    }
 }
 
 /// Upstream's `Polyline2D` — an explicit 2D polyline.

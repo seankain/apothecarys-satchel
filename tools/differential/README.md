@@ -122,7 +122,7 @@ of guessing.
 
 ## What the harness has already found
 
-**Five defects**, each pinned by a test that fails if an upstream rebase fixes
+**Six defects**, each pinned by a test that fails if an upstream rebase fixes
 it, so a workaround can never outlive the thing it works around.
 
 Two are in upstream's analytic area formulas, both dimensional errors — a length
@@ -187,6 +187,50 @@ The fifth is in `Discretizer::process(Extrusion*)`:
   measure means something and upstream is not being accused wholesale), and zero
   for the port on the same mesh.
 
+The sixth is in `PglTurtleDrawer::generalizedCylinder`, found when the turtle
+cases went in (#20):
+
+- **The first ring of a sweep that starts after a turn is an ellipse.** The
+  drawer sets `Extrusion::InitialNormal` to the turtle's `left` at the first
+  recorded point, and `Extrusion::getInitialFrameAt` crosses that vector with
+  the axis's first tangent *without orthogonalising it against that tangent or
+  renormalising the result*. When the turtle turned between recording the point
+  and drawing the first segment — which every branch does, and which tropism
+  does on every step — the cross product is short by the cosine of that turn,
+  and the ring is squashed along one axis by exactly that factor. It is in the
+  reference in plain sight: `turtle_gc_branch` turns 40° and its first ring's
+  radii run 0.0383 … 0.05, and `0.05 · cos 40° = 0.0383`.
+  `the_skewed_first_ring_is_upstreams_alone` asserts that factor against the
+  turn the program made, that a sweep which starts *without* a turn is
+  unaffected (so the measure means something), and that the port's own first
+  ring is the cross-section it was given in every program. The port expresses
+  the same initial normal as a *rotation* of the cross-section — an angle,
+  which cannot come out non-unit.
+
+## Turtle programs are compared too, differently again
+
+A turtle case is neither a geometry nor a curve: it is a *program*. `TURTLE_CASES`
+in the script drives the same command sequence through upstream's `PglTurtle`,
+and `turtle_programs_match_upstream` drives it through the port's. What is
+compared per program is the scene each drew — the number of shapes, the kind of
+each (under however many transformations placed it), and per shape its point
+count, triangle count, surface area, bounding box and first swept ring — plus
+the frame the turtle ended in: position, heading, left, up and width. That last
+part matters as much as the geometry, because a turtle whose frame drifts
+places every later organ wrongly and no single mesh would show it.
+
+The twelve programs cover what T8.8 and T8.9 name: plain and tapered segments,
+branching with `push`/`pop`, the standalone primitives, generalized cylinders
+(with and without a branch), polygons, a set cross-section, tropism, a guide, a
+guided sweep, and one plant-scale program that uses most of them at once.
+
+Two of upstream's Python bindings are not callable in the build this was
+generated against — `Turtle::sweep` (neither overload accepts a `Polyline`
+path) and the radius-varying `nF` — so `turtle_guided_sweep` drives the
+composition `sweep` performs (`setGuide` + `setCrossSection` + `nF`) directly.
+The port's own `sweep` and its radius profile are covered by
+`crates/plantgl/tests/turtle.rs`.
+
 ## The port's own divergences, asserted rather than excused
 
 Three places where the port deliberately differs. Each is checked *as a
@@ -245,15 +289,15 @@ wrong on either side.
 
 ## Adding a case
 
-1. Add it to `CASES` (a mesh) or `CURVE_CASES` (a curve) in
-   `upstream_measure.py`.
-2. Add the same name and parameters to `build()` or `build_curve()` in
-   `crates/plantgl/tests/differential.rs`.
+1. Add it to `CASES` (a mesh), `CURVE_CASES` (a curve) or `TURTLE_CASES` (a
+   turtle program) in `upstream_measure.py`.
+2. Add the same name and parameters to `build()`, `build_curve()` or
+   `run_turtle()` in `crates/plantgl/tests/differential.rs`.
 3. Regenerate the reference and run the tests.
 
-`every_reference_case_is_covered` and `every_reference_curve_is_covered` fail if
-the two lists drift apart, so a typo cannot silently drop a primitive from the
-comparison.
+`every_reference_case_is_covered`, `every_reference_curve_is_covered` and
+`every_reference_turtle_is_covered` fail if the two lists drift apart, so a typo
+cannot silently drop a primitive, a curve or a program from the comparison.
 
 ## Licensing
 

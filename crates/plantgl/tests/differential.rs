@@ -615,6 +615,74 @@ mod mini_json {
             .collect()
     }
 
+    /// The body with one array-valued key's contents removed.
+    ///
+    /// The reference nests an array of objects inside each turtle entry, and
+    /// those objects repeat the outer keys (`area`, `triangles`). Scalars are
+    /// read from what is left, so an inner key cannot shadow an outer one.
+    pub fn without_array(body: &str, key: &str) -> String {
+        let needle = format!("\"{key}\"");
+        let Some(start) = body.find(&needle) else {
+            return body.to_string();
+        };
+        let Some(open) = body[start..].find('[').map(|o| start + o) else {
+            return body.to_string();
+        };
+        let mut depth = 0usize;
+        for (offset, byte) in body[open..].bytes().enumerate() {
+            match byte {
+                b'[' => depth += 1,
+                b']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let mut out = String::with_capacity(body.len());
+                        out.push_str(&body[..start]);
+                        out.push_str(&body[open + offset + 1..]);
+                        return out;
+                    }
+                }
+                _ => {}
+            }
+        }
+        body.to_string()
+    }
+
+    /// The `{ … }` objects of an array-valued key, in order.
+    pub fn array_objects(body: &str, key: &str) -> Vec<String> {
+        let needle = format!("\"{key}\"");
+        let Some(start) = body.find(&needle) else {
+            return Vec::new();
+        };
+        let start = start + needle.len();
+        let Some(open) = body[start..].find('[') else {
+            return Vec::new();
+        };
+        let open = start + open;
+
+        let mut objects = Vec::new();
+        let mut depth = 0usize;
+        let mut object_start = 0usize;
+        for (offset, byte) in body[open..].bytes().enumerate() {
+            match byte {
+                b'{' => {
+                    if depth == 0 {
+                        object_start = open + offset + 1;
+                    }
+                    depth += 1;
+                }
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        objects.push(body[object_start..open + offset].to_string());
+                    }
+                }
+                b']' if depth == 0 => break,
+                _ => {}
+            }
+        }
+        objects
+    }
+
     pub fn triple(body: &str, key: &str) -> [f32; 3] {
         let needle = format!("\"{key}\"");
         let start = body.find(&needle).expect("triple key") + needle.len();
@@ -1746,5 +1814,625 @@ fn a_zero_taper_frustum_keeps_upstreams_degenerate_cap() {
             reference.faces,
             "the frustum path is translated verbatim, so its face count must match exactly"
         );
+    }
+}
+
+// --- Phase D (#20): the turtle ----------------------------------------------
+//
+// A turtle case is a *program*. The same command sequence runs through
+// upstream's `PglTurtle` and through the port's, and what is compared is the
+// scene each drew — how many shapes, of what kinds, with what meshes and what
+// areas — plus the frame the turtle ended in. That last part matters as much
+// as the geometry: a turtle whose frame drifts places every later organ
+// wrongly, and no single shape's mesh would show it.
+
+/// One shape upstream's turtle drew.
+#[derive(Debug, Clone)]
+struct TurtleShapeReference {
+    kind: String,
+    points: usize,
+    triangles: usize,
+    area: Real,
+    bbox_min: [Real; 3],
+    bbox_max: [Real; 3],
+    /// The spread of the first swept ring's radii, for the skew defect below.
+    /// `(0, 0)` where the shape is not an [`Extrusion`].
+    first_ring: (Real, Real),
+}
+
+/// One upstream turtle program's output.
+#[derive(Debug, Clone)]
+struct TurtleReference {
+    section_resolution: u32,
+    shapes: Vec<TurtleShapeReference>,
+    triangles: usize,
+    area: Real,
+    final_position: [Real; 3],
+    final_heading: [Real; 3],
+    final_left: [Real; 3],
+    final_up: [Real; 3],
+    final_width: Real,
+}
+
+fn turtle_references() -> BTreeMap<String, TurtleReference> {
+    let turtles =
+        mini_json::object_body(REFERENCE, "turtles").expect("reference has a `turtles` object");
+
+    mini_json::entries(turtles)
+        .into_iter()
+        .map(|(name, body)| {
+            // The per-shape objects repeat `area` and `triangles`, so the
+            // totals are read from the body with that array removed.
+            let outer = mini_json::without_array(&body, "shapes");
+            let number = |key: &str| -> Real {
+                mini_json::scalar(&outer, key)
+                    .parse()
+                    .unwrap_or_else(|e| panic!("{name}.{key}: {e}"))
+            };
+            let shapes = mini_json::array_objects(&body, "shapes")
+                .into_iter()
+                .map(|shape| TurtleShapeReference {
+                    kind: mini_json::scalar(&shape, "kind").to_string(),
+                    points: mini_json::scalar(&shape, "points").parse().expect("points"),
+                    triangles: mini_json::scalar(&shape, "triangles")
+                        .parse()
+                        .expect("triangles"),
+                    area: mini_json::scalar(&shape, "area").parse().expect("area"),
+                    bbox_min: mini_json::triple(&shape, "bbox_min"),
+                    bbox_max: mini_json::triple(&shape, "bbox_max"),
+                    first_ring: (
+                        mini_json::scalar(&shape, "first_ring_min")
+                            .parse()
+                            .expect("first_ring_min"),
+                        mini_json::scalar(&shape, "first_ring_max")
+                            .parse()
+                            .expect("first_ring_max"),
+                    ),
+                })
+                .collect();
+            let reference = TurtleReference {
+                section_resolution: mini_json::scalar(&outer, "section_resolution")
+                    .parse()
+                    .expect("section_resolution"),
+                shapes,
+                triangles: mini_json::scalar(&outer, "triangles")
+                    .parse()
+                    .expect("triangles"),
+                area: number("area"),
+                final_position: mini_json::triple(&outer, "final_position"),
+                final_heading: mini_json::triple(&outer, "final_heading"),
+                final_left: mini_json::triple(&outer, "final_left"),
+                final_up: mini_json::triple(&outer, "final_up"),
+                final_width: number("final_width"),
+            };
+            (name, reference)
+        })
+        .collect()
+}
+
+/// A quarter circle starting along `+Z` — `guide_arc` in the script.
+fn guide_arc() -> plantgl::scenegraph::curve::Curve3DRef {
+    let segments = 64;
+    Curve3D::from(Polyline::new(
+        (0..=segments)
+            .map(|i| {
+                let t = std::f32::consts::FRAC_PI_2 * i as Real / segments as Real;
+                Point3::new(1.0 - t.cos(), 0.0, t.sin())
+            })
+            .collect(),
+    ))
+    .into_ref()
+}
+
+/// The square profile `square_section` builds.
+fn square_section() -> plantgl::scenegraph::curve::Curve2DRef {
+    profile(&[
+        (-1.0, -1.0),
+        (1.0, -1.0),
+        (1.0, 1.0),
+        (-1.0, 1.0),
+        (-1.0, -1.0),
+    ])
+}
+
+/// The Rust half of `TURTLE_CASES`, command for command.
+fn run_turtle(case: &str, resolution: u32) -> Option<plantgl::modelling::SceneDrawer> {
+    use plantgl::modelling::{SceneDrawer, Turtle};
+
+    let mut t = Turtle::new(SceneDrawer::new());
+    t.set_section_resolution(resolution);
+
+    match case {
+        "turtle_straight" => {
+            t.set_width(0.1).unwrap();
+            t.forward(1.0).unwrap();
+        }
+        "turtle_tapered" => {
+            t.set_width(0.1).unwrap();
+            t.forward_tapered(1.0, 0.05).unwrap();
+            t.forward_tapered(1.0, 0.02).unwrap();
+        }
+        "turtle_branching" => {
+            t.set_width(0.05).unwrap();
+            t.forward(1.0).unwrap();
+            t.push();
+            t.left(35.0);
+            t.forward_tapered(0.7, 0.02).unwrap();
+            t.pop().unwrap();
+            t.push();
+            t.right(35.0);
+            t.roll_left(90.0);
+            t.forward_tapered(0.7, 0.02).unwrap();
+            t.pop().unwrap();
+            t.down(20.0);
+            t.forward_tapered(0.5, 0.03).unwrap();
+        }
+        "turtle_primitives" => {
+            t.set_width(0.2).unwrap();
+            t.sphere(0.3).unwrap();
+            t.f(1.0).unwrap();
+            t.circle(0.25).unwrap();
+            t.f(1.0).unwrap();
+            t.quad(0.6, Some(0.2)).unwrap();
+            t.f(1.0).unwrap();
+            t.box3(0.6, Some(0.2)).unwrap();
+        }
+        "turtle_gc" => {
+            t.set_width(0.06).unwrap();
+            t.start_gc();
+            for _ in 0..20 {
+                t.left(3.0);
+                t.forward(0.1).unwrap();
+            }
+            t.stop_gc().unwrap();
+        }
+        "turtle_gc_branch" => {
+            t.set_width(0.05).unwrap();
+            t.start_gc();
+            t.forward(0.5).unwrap();
+            t.push();
+            t.left(40.0);
+            t.forward(0.4).unwrap();
+            t.forward(0.4).unwrap();
+            t.pop().unwrap();
+            t.forward(0.5).unwrap();
+            t.stop_gc().unwrap();
+        }
+        "turtle_polygon" => {
+            t.start_polygon();
+            t.polygon_point();
+            for _ in 0..4 {
+                t.left(72.0);
+                t.f(0.3).unwrap();
+                t.polygon_point();
+            }
+            t.stop_polygon(false).unwrap();
+        }
+        "turtle_cross_section" => {
+            t.set_width(0.1).unwrap();
+            t.set_cross_section(square_section(), true);
+            t.forward(1.0).unwrap();
+            t.forward_tapered(1.0, 0.05).unwrap();
+        }
+        "turtle_tropism" => {
+            t.set_width(0.04).unwrap();
+            t.set_head(Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0))
+                .unwrap();
+            t.set_tropism(Vec3::new(0.0, 0.0, -1.0));
+            t.set_elasticity(0.5);
+            for _ in 0..12 {
+                t.forward(0.1).unwrap();
+            }
+        }
+        "turtle_guide" => {
+            t.set_width(0.04).unwrap();
+            let arc = guide_arc();
+            let length = arc.length(64).unwrap();
+            t.set_guide(arc, length).unwrap();
+            t.n_forward(length, length / 10.0).unwrap();
+        }
+        "turtle_guided_sweep" => {
+            t.set_width(0.05).unwrap();
+            let arc = guide_arc();
+            let length = arc.length(64).unwrap();
+            t.set_guide(arc, length).unwrap();
+            t.set_cross_section(
+                Curve2D::from(Polyline2D::circle(1.0, resolution as u8)).into_ref(),
+                true,
+            );
+            t.n_forward(length, length / 8.0).unwrap();
+        }
+        "turtle_plant" => {
+            t.set_width(0.08).unwrap();
+            t.set_tropism(Vec3::new(0.0, 0.0, -1.0));
+            t.set_elasticity(0.15);
+            t.start_gc();
+            for i in 0..6 {
+                t.forward_tapered(0.3, 0.08 - 0.01 * i as Real).unwrap();
+                t.roll_left(60.0);
+            }
+            t.stop_gc().unwrap();
+            for _ in 0..3 {
+                t.push();
+                t.left(40.0);
+                t.set_width(0.03).unwrap();
+                t.start_gc();
+                t.forward(0.25).unwrap();
+                t.forward(0.25).unwrap();
+                t.stop_gc().unwrap();
+                t.push();
+                t.down(30.0);
+                t.surface("l", 0.4).unwrap();
+                t.pop().unwrap();
+                t.pop().unwrap();
+                t.roll_left(120.0);
+                t.f(0.1).unwrap();
+            }
+        }
+        _ => return None,
+    }
+    t.stop().unwrap();
+
+    // The frame the program ended in, checked by the caller against
+    // upstream's.
+    TURTLE_FINAL_STATE.with(|cell| {
+        *cell.borrow_mut() = Some(TurtleFinalState {
+            position: t.position(),
+            heading: t.heading(),
+            left: t.left_vector(),
+            up: t.up_vector(),
+            width: t.width(),
+        });
+    });
+    Some(t.into_drawer())
+}
+
+/// Where [`run_turtle`] leaves the turtle, so the comparison can read both the
+/// scene and the frame without the case list returning a pair.
+#[derive(Debug, Clone, Copy)]
+struct TurtleFinalState {
+    position: Point3,
+    heading: Vec3,
+    left: Vec3,
+    up: Vec3,
+    width: Real,
+}
+
+thread_local! {
+    static TURTLE_FINAL_STATE: std::cell::RefCell<Option<TurtleFinalState>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The shape under however many transformations placed it — `leaf_geometry`
+/// in the script.
+fn leaf_kind(geometry: &Geometry) -> &'static str {
+    match geometry {
+        Geometry::Transformed(transformed) => leaf_kind(&transformed.child),
+        leaf => leaf.type_name(),
+    }
+}
+
+/// Upstream's class name for what the port calls `kind`.
+///
+/// The two agree everywhere but `Box`, which upstream spells `Box` and the
+/// port's sum type spells `Box` as well — the mapping exists so a rename on
+/// either side is a compile error here rather than a silent skip.
+fn upstream_kind(kind: &str) -> &str {
+    match kind {
+        "Box" => "Box",
+        other => other,
+    }
+}
+
+/// The spread of a swept shape's first ring — the same measurement
+/// `upstream_measure.py` records, taken from the port's own mesh.
+///
+/// One ring per axis point, so the ring size follows from the mesh rather
+/// than from the section resolution.
+fn first_ring(geometry: &Geometry, model: &Explicit) -> Option<(Real, Real)> {
+    let Geometry::Extrusion(extrusion) = strip_transforms(geometry) else {
+        return None;
+    };
+    let Curve3D::Polyline(axis) = extrusion.axis.as_ref() else {
+        return None;
+    };
+    let rings = axis.points.len().max(1);
+    let ring_size = model.points().len() / rings;
+    if ring_size < 3 {
+        return None;
+    }
+    let ring = &model.points()[..ring_size];
+    let centre = ring.iter().fold(Vec3::zeros(), |acc, p| acc + p.coords) / ring_size as Real;
+    let radii: Vec<Real> = ring.iter().map(|p| (p.coords - centre).norm()).collect();
+    Some((
+        radii.iter().copied().fold(Real::INFINITY, Real::min),
+        radii.iter().copied().fold(0.0, Real::max),
+    ))
+}
+
+fn strip_transforms(geometry: &Geometry) -> &Geometry {
+    match geometry {
+        Geometry::Transformed(transformed) => strip_transforms(&transformed.child),
+        leaf => leaf,
+    }
+}
+
+/// **An upstream defect the Phase D harness found: the first ring of a sweep
+/// that starts after a turn is an ellipse.**
+///
+/// `PglTurtleDrawer::generalizedCylinder` sets `Extrusion::InitialNormal` to
+/// the turtle's `left` at the first recorded point, and upstream's
+/// `Extrusion::getInitialFrameAt` crosses that vector with the axis's first
+/// tangent *without orthogonalising it against that tangent or renormalising
+/// the result*. When the turtle turned between recording the point and drawing
+/// the first segment — which is what every branch does, and what tropism does
+/// on every step — the cross product is short by the cosine of that turn, and
+/// the ring is squashed along one axis by exactly that factor.
+///
+/// It is visible in the reference: `turtle_gc_branch`'s branch turns 40° and
+/// its first ring's radii run `0.0383 … 0.05`, and `0.05 · cos 40° = 0.0383`.
+/// The port expresses the same initial normal as a *rotation* of the
+/// cross-section — an angle, which cannot be non-unit — so its first ring is
+/// always the section it was given.
+///
+/// Returns how much narrower upstream's ring is, as a factor in `(0, 1]`.
+fn upstream_ring_skew(expected: (Real, Real), ours: (Real, Real)) -> Real {
+    if ours.0 <= 1e-9 {
+        return 1.0;
+    }
+    (expected.0 / ours.0).min(1.0)
+}
+
+/// Cases whose meshes go through an [`Extrusion`] on a *curved* axis, where
+/// the port's rotation-minimising frames and upstream's projection frames
+/// differ by a bounded rotation of each ring — the divergence
+/// [`frame_divergence_bound`] documents for the Phase C cases.
+///
+/// The value is the widest radius the case sweeps, from which the sagitta
+/// bound follows.
+fn turtle_frame_divergence(case: &str) -> Option<Real> {
+    Some(match case {
+        "turtle_gc" => 0.06,
+        "turtle_gc_branch" => 0.05,
+        "turtle_guided_sweep" => 0.05,
+        "turtle_plant" => 0.08,
+        _ => return None,
+    })
+}
+
+/// Cases driven by a guide, where the port resamples upstream's arc-length
+/// table onto an even grid (see `ParametricCurve::arc_length_to_u_mapping`).
+/// The parameter each step lands on can differ in the last digits, which moves
+/// a sampled point by a fraction of a step.
+fn is_guided(case: &str) -> bool {
+    matches!(case, "turtle_guide" | "turtle_guided_sweep")
+}
+
+#[test]
+fn turtle_programs_match_upstream() {
+    for (case, reference) in turtle_references() {
+        let Some(drawer) = run_turtle(&case, reference.section_resolution) else {
+            panic!("no Rust program for turtle case {case}");
+        };
+        let scene = drawer.scene();
+        let final_state = TURTLE_FINAL_STATE
+            .with(|cell| *cell.borrow())
+            .expect("run_turtle records the final state");
+
+        assert_eq!(
+            scene.len(),
+            reference.shapes.len(),
+            "{case}: drew {} shapes where upstream drew {}",
+            scene.len(),
+            reference.shapes.len()
+        );
+
+        let sagitta = turtle_frame_divergence(&case).map(|radius| {
+            radius * (1.0 - (std::f32::consts::PI / reference.section_resolution as Real).cos())
+        });
+        let area_tolerance = if sagitta.is_some() {
+            FRAME_DIVERGENCE_AREA_TOLERANCE
+        } else {
+            1e-3
+        };
+        let position_tolerance = if is_guided(&case) { 2e-3 } else { 1e-4 };
+        let bbox_tolerance = sagitta.unwrap_or(0.0) + position_tolerance;
+
+        let ctx = DiscretizeCtx::default();
+        let mut triangles = 0;
+        let mut area = 0.0;
+        let mut total_skew: Real = 1.0;
+        for (index, (shape, expected)) in scene.iter().zip(&reference.shapes).enumerate() {
+            let kind = leaf_kind(&shape.geometry);
+            assert_eq!(
+                upstream_kind(kind),
+                expected.kind,
+                "{case}: shape {index} is a {kind} where upstream drew a {}",
+                expected.kind
+            );
+
+            let model = discretize_with(&shape.geometry, ctx).expect("discretise");
+            assert_eq!(
+                model.points().len(),
+                expected.points,
+                "{case}: shape {index} ({kind}) has {} points against upstream's {}",
+                model.points().len(),
+                expected.points
+            );
+
+            let mesh = tessellate(&model).expect("tessellate");
+            assert_eq!(
+                mesh.face_count(),
+                expected.triangles,
+                "{case}: shape {index} ({kind}) has {} triangles against upstream's {}",
+                mesh.face_count(),
+                expected.triangles
+            );
+
+            // Where upstream's first ring is squashed (see
+            // `upstream_ring_skew`), its mesh is not quite the surface ours
+            // is, and the difference is bounded by how much of the shape that
+            // one ring bounds: the first gap's trapezoids shrink by the mean
+            // of 1 and the skew, and every later ring is unaffected.
+            let skew = match (first_ring(&shape.geometry, &model), expected.first_ring) {
+                (Some(ours), theirs) if theirs.1 > 0.0 => {
+                    assert!(
+                        (ours.1 - theirs.1).abs() <= 1e-4,
+                        "{case}: shape {index} first ring reaches {} against upstream's {}",
+                        ours.1,
+                        theirs.1
+                    );
+                    upstream_ring_skew(theirs, ours)
+                }
+                _ => 1.0,
+            };
+            let shape_area_tolerance = area_tolerance + (1.0 - skew) / 2.0;
+
+            let shape_area = surface_area(&Explicit::TriangleSet(mesh)).expect("area");
+            assert!(
+                relative_error(shape_area, expected.area) <= shape_area_tolerance,
+                "{case}: shape {index} ({kind}) has area {shape_area} against upstream's {}",
+                expected.area
+            );
+            total_skew = total_skew.min(skew);
+
+            let bbox = bounding_box(&shape.geometry).expect("bbox").expect("a box");
+            // A squashed first ring lies in the plane the *previous* frame
+            // spanned rather than across the new axis, so upstream's box can
+            // fall short by the whole out-of-plane reach of that ring:
+            // `r·sin θ` for a ring squashed by `cos θ = skew`.
+            let shape_bbox_tolerance =
+                bbox_tolerance + expected.first_ring.1 * (1.0 - skew * skew).sqrt();
+            for axis in 0..3 {
+                assert!(
+                    (bbox.lower_left[axis] - expected.bbox_min[axis]).abs()
+                        <= shape_bbox_tolerance
+                        && (bbox.upper_right[axis] - expected.bbox_max[axis]).abs()
+                            <= shape_bbox_tolerance,
+                    "{case}: shape {index} ({kind}) axis {axis} box \
+                     [{}, {}] against upstream's [{}, {}]",
+                    bbox.lower_left[axis],
+                    bbox.upper_right[axis],
+                    expected.bbox_min[axis],
+                    expected.bbox_max[axis]
+                );
+            }
+
+            triangles += expected.triangles;
+            area += shape_area;
+        }
+
+        assert_eq!(triangles, reference.triangles, "{case}: triangle total");
+        let area_tolerance = area_tolerance + (1.0 - total_skew) / 2.0;
+        assert!(
+            relative_error(area, reference.area) <= area_tolerance,
+            "{case}: total area {area} against upstream's {}",
+            reference.area
+        );
+
+        // The frame: where a turtle ends decides where everything drawn after
+        // it would go, so this is checked even though nothing was drawn there.
+        let vectors = [
+            ("position", final_state.position.coords, reference.final_position),
+            ("heading", final_state.heading, reference.final_heading),
+            ("left", final_state.left, reference.final_left),
+            ("up", final_state.up, reference.final_up),
+        ];
+        for (what, ours, theirs) in vectors {
+            let theirs = Vec3::new(theirs[0], theirs[1], theirs[2]);
+            assert!(
+                (ours - theirs).norm() <= position_tolerance,
+                "{case}: final {what} {ours:?} against upstream's {theirs:?}"
+            );
+        }
+        assert!(
+            (final_state.width - reference.final_width).abs() <= 1e-6,
+            "{case}: final width {} against upstream's {}",
+            final_state.width,
+            reference.final_width
+        );
+    }
+}
+
+#[test]
+fn every_reference_turtle_is_covered() {
+    let references = turtle_references();
+    assert!(
+        references.len() >= 10,
+        "the turtle harness covers only {} programs",
+        references.len()
+    );
+    for case in references.keys() {
+        assert!(
+            run_turtle(case, 8).is_some(),
+            "no Rust program for turtle case {case}"
+        );
+    }
+    // The features T8.8 and T8.9 name, each in at least one program.
+    for required in [
+        "turtle_branching",
+        "turtle_gc",
+        "turtle_polygon",
+        "turtle_cross_section",
+        "turtle_tropism",
+        "turtle_guide",
+        "turtle_plant",
+    ] {
+        assert!(
+            references.contains_key(required),
+            "the reference has no {required} program; regenerate it"
+        );
+    }
+}
+
+/// The skewed first ring is upstream's alone, and it is exactly predictable.
+///
+/// See [`upstream_ring_skew`] for what the defect is. This pins it from both
+/// sides so a workaround can never outlive the thing it works around: if an
+/// upstream rebase fixes `Extrusion::getInitialFrameAt`, the first assertion
+/// fails and the allowance in [`turtle_programs_match_upstream`] should go.
+#[test]
+fn the_skewed_first_ring_is_upstreams_alone() {
+    let references = turtle_references();
+
+    // `turtle_gc_branch` turns 40° between recording its first point and
+    // drawing its first segment, so upstream's first ring is squashed by
+    // exactly `cos 40°` — a number derived from the program, not fitted.
+    let branch = &references["turtle_gc_branch"].shapes[0];
+    let predicted = (40.0 as Real).to_radians().cos();
+    let observed = branch.first_ring.0 / branch.first_ring.1;
+    assert!(
+        (observed - predicted).abs() < 1e-3,
+        "upstream's first ring is squashed by {observed}, not the predicted {predicted}"
+    );
+
+    // A sweep that starts without a turn is not affected, so the measurement
+    // means something rather than flagging every swept shape.
+    for case in ["turtle_cross_section", "turtle_guided_sweep"] {
+        for (index, shape) in references[case].shapes.iter().enumerate() {
+            assert!(
+                (shape.first_ring.0 - shape.first_ring.1).abs() < 1e-4,
+                "{case}: shape {index} is squashed upstream too: {:?}",
+                shape.first_ring
+            );
+        }
+    }
+
+    // The port's own first ring is the cross-section it was given, at the
+    // turtle's width, in every one of those programs.
+    for (case, reference) in &references {
+        let drawer = run_turtle(case, reference.section_resolution).expect("a Rust program");
+        let ctx = DiscretizeCtx::default();
+        for (index, shape) in drawer.scene().iter().enumerate() {
+            let model = discretize_with(&shape.geometry, ctx).expect("discretise");
+            let Some((min, max)) = first_ring(&shape.geometry, &model) else {
+                continue;
+            };
+            assert!(
+                (min - max).abs() < 1e-5,
+                "{case}: the port's own shape {index} has a squashed first ring: \
+                 {min} … {max}"
+            );
+        }
     }
 }

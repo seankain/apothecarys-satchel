@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use crate::math::{Real, Vec2};
+use crate::math::{Real, Vec2, EPSILON};
 
 /// An 8-bit RGB colour, as upstream's `Color3` (a `Tuple3<uchar_t>`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,6 +55,101 @@ impl Color3 {
     pub fn scaled(&self, factor: Real) -> Self {
         let scale = |c: u8| ((c as Real * factor).floor()).clamp(0.0, 255.0) as u8;
         Self::new(scale(self.red), scale(self.green), scale(self.blue))
+    }
+
+    /// `Color3::toHSV()` — hue in degrees, saturation in `[0, 1]`, value on
+    /// the same 0–255 scale as the components.
+    pub fn to_hsv(&self) -> [Real; 3] {
+        let (r, g, b) = (self.red as Real, self.green as Real, self.blue as Real);
+        let max = r.max(g).max(b);
+        if max <= EPSILON {
+            return [0.0, 0.0, 0.0];
+        }
+        let min = r.min(g).min(b);
+        let extent = max - min;
+        let saturation = extent / max;
+        if saturation <= EPSILON {
+            return [0.0, 0.0, max];
+        }
+        let (rn, gn, bn) = (
+            (r - min) / extent,
+            (g - min) / extent,
+            (b - min) / extent,
+        );
+        // Upstream keys off *which component is the maximum*, taking the first
+        // on a tie, which is what `std::distance(begin(), getMax())` reports.
+        let hue = if max == r {
+            let hue = 60.0 * (gn - bn);
+            if hue < 0.0 {
+                hue + 360.0
+            } else {
+                hue
+            }
+        } else if max == g {
+            120.0 + 60.0 * (bn - rn)
+        } else {
+            240.0 + 60.0 * (rn - gn)
+        };
+        [hue, saturation, max]
+    }
+
+    /// `Color3::fromHSV(Tuple3<real_t>)`.
+    pub fn from_hsv(hsv: [Real; 3]) -> Self {
+        let [hue, saturation, value] = hsv;
+        let to_u8 = |v: Real| v.clamp(0.0, 255.0) as u8;
+        if saturation <= EPSILON {
+            let v = to_u8(value);
+            return Self::new(v, v, v);
+        }
+        let sector = hue / 60.0;
+        // Upstream's `switch` has no case for a sector of 6, which a hue of
+        // exactly 360 produces, and returns black; the port wraps instead.
+        let index = (sector.floor() as i32).rem_euclid(6);
+        let fraction = sector - sector.floor();
+        let p = value * (1.0 - saturation);
+        let q = value * (1.0 - saturation * fraction);
+        let t = value * (1.0 - saturation * (1.0 - fraction));
+        let (r, g, b) = match index {
+            0 => (value, t, p),
+            1 => (q, value, p),
+            2 => (p, value, t),
+            3 => (p, q, value),
+            4 => (t, p, value),
+            _ => (value, p, q),
+        };
+        Self::new(to_u8(r), to_u8(g), to_u8(b))
+    }
+
+    /// `Color3::interpolate(c1, c2, t)` — interpolation in HSV, going the
+    /// short way round the hue circle.
+    ///
+    /// Not RGB: mixing two hues through RGB runs through grey, which is not
+    /// what "half way between this leaf colour and that one" should look like.
+    pub fn interpolate(a: Color3, b: Color3, t: Real) -> Self {
+        let t = t.clamp(0.0, 1.0);
+        let one_minus_t = 1.0 - t;
+        let first = a.to_hsv();
+        let second = b.to_hsv();
+        let (mut h1, mut h2) = (first[0], second[0]);
+        let (min_hue, max_hue) = (h1.min(h2), h1.max(h2));
+        let mut hue = h1 * one_minus_t + h2 * t;
+        if max_hue - min_hue > min_hue + 360.0 - max_hue {
+            // The short way round crosses 0°.
+            if h1 > h2 {
+                h2 += 360.0;
+            } else {
+                h1 += 360.0;
+            }
+            hue = h1 * one_minus_t + h2 * t;
+            if hue >= 360.0 {
+                hue -= 360.0;
+            }
+        }
+        Self::from_hsv([
+            hue,
+            first[1] * one_minus_t + second[1] * t,
+            first[2] * one_minus_t + second[2] * t,
+        ])
     }
 }
 
@@ -146,6 +241,28 @@ impl Material {
     /// `getDiffuseColor()`: `ambient * diffuse`, floored per channel.
     pub fn diffuse_color(&self) -> Color3 {
         self.ambient.scaled(self.diffuse)
+    }
+
+    /// `interpolate(m1, m2, t)` from `material.cpp` — component-wise, with
+    /// the three colours interpolated in HSV by [`Color3::interpolate`].
+    ///
+    /// This is what `Turtle::interpolateColors` produces: a colour part way
+    /// between two entries of the turtle's colour list, so a stem can darken
+    /// along its length without a material per segment. The name is taken
+    /// from the first material, as a blend of two named materials is still
+    /// one material.
+    pub fn interpolate(a: &Material, b: &Material, t: Real) -> Material {
+        let t = t.clamp(0.0, 1.0);
+        let one_minus_t = 1.0 - t;
+        Material {
+            name: a.name.clone(),
+            ambient: Color3::interpolate(a.ambient, b.ambient, t),
+            diffuse: a.diffuse * one_minus_t + b.diffuse * t,
+            specular: Color3::interpolate(a.specular, b.specular, t),
+            emission: Color3::interpolate(a.emission, b.emission, t),
+            shininess: a.shininess * one_minus_t + b.shininess * t,
+            transparency: a.transparency * one_minus_t + b.transparency * t,
+        }
     }
 
     /// `isValid()`: the coefficients must lie in upstream's admissible ranges.
