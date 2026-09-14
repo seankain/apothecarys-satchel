@@ -94,9 +94,15 @@ pub struct LSystem {
 }
 
 /// How often a node puts out a flower alongside its growth.
-const FLOWER_PROBABILITY: f32 = 0.18;
+///
+/// A fertile rule makes one apex where the growth rule makes two, so these two
+/// numbers are also what a flowering plant spends on flowering: at 0.12 and
+/// 0.08 an apex count that would double per step grows by 1.8 instead. That is
+/// the right shape — growth diverted to reproduction is what determinate
+/// growth *is* — but it should cost a fifth of the branching, not a third.
+const FLOWER_PROBABILITY: f32 = 0.12;
 /// How often a node sets fruit alongside its growth.
-const FRUIT_PROBABILITY: f32 = 0.12;
+const FRUIT_PROBABILITY: f32 = 0.08;
 /// How far a leaf is pitched away from the axis it hangs off, in degrees.
 const LEAF_PITCH: f32 = 55.0;
 /// How far a petal is pitched away from the flower's axis, in degrees.

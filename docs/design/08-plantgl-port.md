@@ -769,12 +769,49 @@ curvature — plus a petal shape index and an LOD tier. Widening
 pair, so each rides the gene nearest it in meaning; `express_phenotype`
 documents the mapping at the call site.
 
+#### Before and after
+
 The golden OBJs taken before T8.10 are kept at
 `crates/botany/tests/golden/pre-plantgl/` and a post-port set is asserted
-alongside. Face counts across the five seeds go 48 → 330, 945 → 2 168,
-434 → 1 658, 465 → 2 576 and 225 → 1 340: real leaf surfaces in place of one
-marker triangle each, swept tapering axes in place of ring pairs, texture
-coordinates, and petals and fruit appearing at all for the first time.
+alongside. `tools/obj-render/` renders both, same seed, same camera, same
+scale — the exported geometry rather than a window, since that is the thing
+that changed and it needs no display to look at.
+
+Left panel is the hand-rolled generator, right panel is the same seed through
+`plantgl`.
+
+**Seed 42**
+
+![seed 42, before and after](images/plantgl-phase-e/seed-42.png)
+
+**Seed 999**
+
+![seed 999, before and after](images/plantgl-phase-e/seed-999.png)
+
+**Seed 12345**
+
+![seed 12345, before and after](images/plantgl-phase-e/seed-12345.png)
+
+Seeds [1](images/plantgl-phase-e/seed-1.png) and
+[100](images/plantgl-phase-e/seed-100.png) are alongside them.
+
+Face counts go 48 → 330, 945 → 2 232, 434 → 1 578, 465 → 2 528 and
+225 → 1 276 across the five seeds. The triangles are not the interesting part
+of the diff, though — these are:
+
+- **The stems are continuous and taper.** A branch is one swept surface with a
+  ring per node, not a ring pair per internode meeting at a hard seam.
+- **The leaves are surfaces.** Each was one marker triangle, side-on and
+  nearly invisible; each is now a cupped, drooping Bézier blade.
+- **There are flowers and fruit at all.** No plant in the game had ever grown
+  either, because the rules that made them could not be reached.
+- **The plants are smaller.** A flowering plant spends a fifth of its apex
+  budget on flowering instead of branching, so a genotype that produced 63
+  internodes produces around 40. That is the cost of the previous point, it is
+  what determinate growth means, and it is the one thing in this diff that a
+  reader should decide about rather than simply accept:
+  `FLOWER_PROBABILITY` and `FRUIT_PROBABILITY` in `lsystem.rs` are the dial.
+  A non-flowering genotype branches exactly as it did before.
 
 ---
 

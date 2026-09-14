@@ -56,27 +56,31 @@ On startup, the tool prints a summary of the generated plant:
 === Plant Preview (seed: 42) ===
 
 --- Phenotype ---
-  Branch angle:    32.5°
-  Branch length:   1.20
-  Branch thickness:0.080
-  Complexity:      4 iterations
-  Branching factor:3
+  Branch angle:    48.9°
+  Branch length:   1.05
+  Branch thickness:0.046
+  Complexity:      6 iterations
+  Branching factor:4
+  Cross-section:   profile 1
+  Taper:           Strong
+  Tropism:         elasticity 0.133
+  Axis curvature:  2.0°/segment
   ...
 
 --- Geometry (Hub LOD) ---
-  Symbols:         1893
-  Stem segments:   25
-  Shapes:          90
+  Symbols:         579
+  Stem segments:   27
+  Shapes:          93
   Draw calls:      4
-  Triangles:       2168 (budget 12000)
-  Leaves:          57
-  Petals:          15
+  Triangles:       2232 (budget 12000)
+  Leaves:          69
+  Petals:          5
   Fruit:           3
 
 --- Measurements ---
-  Surface area:    3.8412
-  Volume:          0.004917
-  Bounding box:    2.41 x 3.02 x 2.18  (height 3.02)
+  Surface area:    19.9268
+  Volume:          0.065605
+  Bounding box:    2.66 x 2.33 x 3.31  (height 2.33)
 
 --- Alchemy Effects ---
   Heal: 15 HP
