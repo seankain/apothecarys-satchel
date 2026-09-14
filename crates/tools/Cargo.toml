@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 apothecarys-core = { path = "../core" }
 apothecarys-botany = { path = "../botany" }
+plantgl = { path = "../plantgl" }
 apothecarys-world = { path = "../world" }
 apothecarys-dialogue = { path = "../dialogue" }
 rand = { workspace = true }
@@ -15,7 +16,7 @@ fyrox = { workspace = true, optional = true }
 
 [features]
 default = ["viewer"]
-viewer = ["fyrox"]
+viewer = ["fyrox", "apothecarys-botany/fyrox"]
 
 [[bin]]
 name = "plant_previewer"

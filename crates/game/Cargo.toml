@@ -9,7 +9,8 @@ apothecarys-inventory = { path = "../inventory" }
 apothecarys-party = { path = "../party" }
 apothecarys-combat = { path = "../combat" }
 apothecarys-garden = { path = "../garden" }
-apothecarys-botany = { path = "../botany" }
+apothecarys-botany = { path = "../botany", features = ["fyrox"] }
+plantgl = { path = "../plantgl" }
 apothecarys-world = { path = "../world" }
 apothecarys-dialogue = { path = "../dialogue" }
 apothecarys-persistence = { path = "../persistence" }

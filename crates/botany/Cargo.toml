@@ -5,8 +5,19 @@ edition = "2021"
 
 [dependencies]
 apothecarys-core = { path = "../core" }
+# CeCILL-C. `botany` only *uses* it, which makes this crate Derivative Software
+# under CeCILL-C Article 5.3.3 and leaves it MIT; see the root README and
+# THIRD-PARTY-LICENSES. No translated PlantGL code may be pasted in here.
+plantgl = { path = "../plantgl" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 ron = { workspace = true }
 rand = { workspace = true }
+fyrox = { workspace = true, optional = true }
+
+[features]
+default = []
+# The Fyrox bridge. Off by default so the headless crates that depend on
+# `botany` — `garden`, `persistence` — never pull the engine in.
+fyrox = ["dep:fyrox"]

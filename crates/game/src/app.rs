@@ -12,7 +12,10 @@ use fyrox::{
     scene::Scene,
 };
 
+use apothecarys_garden::plots::Garden;
+
 use crate::camera::{IsoCameraConfig, IsometricCamera};
+use crate::garden_scene::{build_garden_scene, GardenLayout};
 use crate::hub_scene::build_hub_scene;
 use crate::ui::main_menu::MainMenuState;
 
@@ -50,6 +53,18 @@ pub struct GamePlugin {
     #[visit(skip)]
     #[reflect(hidden)]
     menu_open: bool,
+
+    /// Where the plots sit and how far away a plant drops to the coarser tier.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    garden_layout: GardenLayout,
+
+    /// The plant node for each plot, in plot order; `Handle::NONE` for an
+    /// empty plot. Kept so a plot can be rebuilt on its own after planting or
+    /// harvesting rather than rebuilding the whole garden.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    garden_plants: Vec<Handle<fyrox::scene::node::Node>>,
 }
 
 impl GamePlugin {
@@ -60,6 +75,8 @@ impl GamePlugin {
             main_menu: None,
             camera: None,
             menu_open: false,
+            garden_layout: GardenLayout::default(),
+            garden_plants: Vec::new(),
         }
     }
 
@@ -84,8 +101,51 @@ impl GamePlugin {
 
         self.scene_handle = context.scenes.add(scene);
         self.state = GameState::Hub;
+        self.garden_plants.clear();
 
         Log::writeln(MessageKind::Information, "Entered Hub state");
+    }
+
+    /// Transition into the Garden state: build the plot grid and grow every
+    /// planted plot through `plantgl`.
+    ///
+    /// Plants are generated here, once, rather than per frame: a full garden
+    /// costs a few milliseconds (`crates/botany/tests/budget.rs` holds it to
+    /// 15 ms a plant), which belongs in the transition and not in `update`.
+    pub fn enter_garden(&mut self, garden: &Garden, context: &mut PluginContext) {
+        if self.scene_handle.is_some() {
+            context.scenes.remove(self.scene_handle);
+        }
+
+        let config = IsoCameraConfig::default();
+        // The camera looks at the middle of the grid, so "near" is measured
+        // from where the player actually is.
+        let viewer = self.garden_layout.plot_position(garden.plots.len() / 2);
+        let (mut scene, plants) = build_garden_scene(garden, &self.garden_layout, viewer);
+
+        let iso_camera = IsometricCamera::new(&mut scene, config);
+        self.camera = Some(iso_camera);
+        self.garden_plants = plants;
+
+        self.scene_handle = context.scenes.add(scene);
+        self.state = GameState::Garden;
+
+        Log::writeln(
+            MessageKind::Information,
+            format!(
+                "Entered Garden state: {} plots, {} planted",
+                garden.plots.len(),
+                self.garden_plants.iter().filter(|h| h.is_some()).count()
+            ),
+        );
+    }
+
+    /// The plant node for a plot, if it has one.
+    pub fn plant_node(&self, plot: usize) -> Option<Handle<fyrox::scene::node::Node>> {
+        self.garden_plants
+            .get(plot)
+            .copied()
+            .filter(|handle| handle.is_some())
     }
 }
 

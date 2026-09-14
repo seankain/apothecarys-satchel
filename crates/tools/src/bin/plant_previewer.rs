@@ -1,3 +1,14 @@
+//! Renders one generated plant, at a seed, through the Fyrox bridge.
+//!
+//! ```text
+//! cargo run --bin plant_previewer -- <seed> [hub|distant|icon]
+//! ```
+//!
+//! The plant arrives as a `plantgl::Scene` — one swept `Extrusion` per branch
+//! axis and one `BezierPatch` per blade — which
+//! `apothecarys_botany::fyrox_bridge` merges by appearance and repacks into
+//! Fyrox surfaces. OBJ and MTL are written alongside, from the same scene.
+
 use std::env;
 
 use fyrox::{
@@ -29,13 +40,9 @@ use fyrox::{
 };
 use fyrox::asset::untyped::ResourceKind;
 
-use apothecarys_botany::turtle::Vec3 as BotanyVec3;
+use apothecarys_botany::fyrox_bridge::plant_to_node;
+use apothecarys_botany::lod::LodTier;
 use apothecarys_tools::plant_preview::PlantPreviewData;
-
-/// Convert our botany Vec3 to Fyrox Vector3.
-fn to_fyrox_vec3(v: BotanyVec3) -> Vector3<f32> {
-    Vector3::new(v.x, v.y, v.z)
-}
 
 /// Create a Fyrox material with the given diffuse color.
 fn colored_material(color: Color) -> MaterialResource {
@@ -53,13 +60,18 @@ struct PlantPreviewerPlugin {
 
     #[visit(skip)]
     #[reflect(hidden)]
+    lod: LodTier,
+
+    #[visit(skip)]
+    #[reflect(hidden)]
     scene_handle: Handle<Scene>,
 }
 
 impl PlantPreviewerPlugin {
-    fn new(seed: u64) -> Self {
+    fn new(seed: u64, lod: LodTier) -> Self {
         Self {
             seed,
+            lod,
             scene_handle: Handle::NONE,
         }
     }
@@ -68,44 +80,66 @@ impl PlantPreviewerPlugin {
         let mut scene = Scene::new();
 
         // Generate the plant
-        let preview = PlantPreviewData::from_seed(self.seed);
+        let preview = PlantPreviewData::from_seed_at(self.seed, self.lod);
         preview.print_summary();
 
-        // Export OBJ and MTL files for external viewing
+        self.export(&preview);
+        self.build_camera(&preview, &mut scene);
+        self.build_light(&mut scene);
+
+        // The plant itself, through the bridge: merged by appearance, so this
+        // is a handful of surfaces rather than one per leaf.
+        match plant_to_node(&preview.plant, &mut scene.graph) {
+            Ok(handle) => Log::writeln(
+                MessageKind::Information,
+                format!("Built plant node {handle:?}"),
+            ),
+            Err(e) => Log::writeln(
+                MessageKind::Error,
+                format!("Failed to build the plant node: {e}"),
+            ),
+        }
+
+        self.build_ground_plane(&mut scene);
+
+        context.scenes.add(scene)
+    }
+
+    /// Export OBJ and MTL files for external viewing.
+    fn export(&self, preview: &PlantPreviewData) {
         let mtl_filename = format!("plant_seed_{}.mtl", self.seed);
         let obj_path = format!("plant_seed_{}.obj", self.seed);
-        if let Err(e) = std::fs::write(&obj_path, preview.mesh.to_obj(&mtl_filename)) {
-            Log::writeln(
-                MessageKind::Warning,
-                format!("Failed to write OBJ file: {e}"),
-            );
-        } else {
-            Log::writeln(
-                MessageKind::Information,
-                format!("Exported OBJ to {obj_path}"),
-            );
-        }
-        if let Err(e) = std::fs::write(&mtl_filename, preview.mesh.to_mtl()) {
-            Log::writeln(
-                MessageKind::Warning,
-                format!("Failed to write MTL file: {e}"),
-            );
-        } else {
-            Log::writeln(
-                MessageKind::Information,
-                format!("Exported MTL to {mtl_filename}"),
-            );
-        }
+        let files = preview.to_obj(&mtl_filename);
 
-        // Create camera looking at the plant
-        let camera_distance = 8.0;
-        let camera_pos = Vector3::new(
-            camera_distance * 0.7,
-            camera_distance * 0.5,
-            camera_distance * 0.7,
-        );
+        for (path, contents) in [(&obj_path, &files.obj), (&mtl_filename, &files.mtl)] {
+            match std::fs::write(path, contents) {
+                Ok(()) => Log::writeln(MessageKind::Information, format!("Exported {path}")),
+                Err(e) => Log::writeln(
+                    MessageKind::Warning,
+                    format!("Failed to write {path}: {e}"),
+                ),
+            }
+        }
+    }
 
-        let look_dir = (Vector3::new(0.0, 2.0, 0.0) - camera_pos).normalize();
+    /// Frames the camera on the plant's own bounding box, so a tall plant and
+    /// a squat one are both in shot.
+    fn build_camera(&self, preview: &PlantPreviewData, scene: &mut Scene) {
+        let (center, height) = match preview.plant.bbox() {
+            Ok(Some(bbox)) => {
+                let center = bbox.center();
+                let size = bbox.size();
+                (
+                    Vector3::new(center.x, center.y, center.z),
+                    size.x.max(size.y).max(size.z).max(1.0),
+                )
+            }
+            _ => (Vector3::new(0.0, 1.0, 0.0), 4.0),
+        };
+
+        let distance = height * 2.5;
+        let camera_pos = center + Vector3::new(distance * 0.7, distance * 0.5, distance * 0.7);
+        let look_dir = (center - camera_pos).normalize();
         let camera_rotation =
             UnitQuaternion::face_towards(&look_dir, &Vector3::new(0.0, 1.0, 0.0));
 
@@ -118,14 +152,15 @@ impl PlantPreviewerPlugin {
             ),
         )
         .with_projection(Projection::Orthographic(OrthographicProjection {
-            vertical_size: 6.0,
+            vertical_size: height * 0.75,
             z_near: 0.1,
             z_far: 100.0,
         }))
         .with_viewport(Rect::new(0.0, 0.0, 1.0, 1.0))
         .build(&mut scene.graph);
+    }
 
-        // Add directional light
+    fn build_light(&self, scene: &mut Scene) {
         DirectionalLightBuilder::new(BaseLightBuilder::new(
             BaseBuilder::new().with_local_transform(
                 TransformBuilder::new()
@@ -136,170 +171,6 @@ impl PlantPreviewerPlugin {
                     .build(),
             ),
         ))
-        .build(&mut scene.graph);
-
-        // Build the stem mesh from plant data
-        self.build_stem_mesh(&preview, &mut scene);
-
-        // Build leaf/flower/fruit meshes as simple colored geometry
-        self.build_organ_meshes(&preview, &mut scene);
-
-        // Build a simple ground plane
-        self.build_ground_plane(&mut scene);
-
-        context.scenes.add(scene)
-    }
-
-    fn build_stem_mesh(&self, preview: &PlantPreviewData, scene: &mut Scene) {
-        let mesh = &preview.mesh;
-        if mesh.stem_vertices.is_empty() {
-            return;
-        }
-
-        let mut positions = Vec::new();
-        let mut normals = Vec::new();
-        let mut indices = Vec::new();
-
-        for v in &mesh.stem_vertices {
-            positions.push(to_fyrox_vec3(v.position));
-            normals.push(to_fyrox_vec3(v.normal));
-        }
-
-        for &idx in &mesh.stem_indices {
-            indices.push(idx);
-        }
-
-        let vertex_data = {
-                    let mut data = Vec::new();
-                    for i in 0..positions.len() {
-                        data.extend_from_slice(&positions[i].x.to_le_bytes());
-                        data.extend_from_slice(&positions[i].y.to_le_bytes());
-                        data.extend_from_slice(&positions[i].z.to_le_bytes());
-                        data.extend_from_slice(&normals[i].x.to_le_bytes());
-                        data.extend_from_slice(&normals[i].y.to_le_bytes());
-                        data.extend_from_slice(&normals[i].z.to_le_bytes());
-                    }
-                    data
-                };
-        let surface_data = SurfaceData::new(
-            fyrox::scene::mesh::buffer::VertexBuffer::new_with_layout(
-                &[
-                    fyrox::scene::mesh::buffer::VertexAttributeDescriptor {
-                        usage: fyrox::scene::mesh::buffer::VertexAttributeUsage::Position,
-                        data_type: fyrox::scene::mesh::buffer::VertexAttributeDataType::F32,
-                        size: 3,
-                        divisor: 0,
-                        shader_location: 0,
-                        normalized: false,
-                    },
-                    fyrox::scene::mesh::buffer::VertexAttributeDescriptor {
-                        usage: fyrox::scene::mesh::buffer::VertexAttributeUsage::Normal,
-                        data_type: fyrox::scene::mesh::buffer::VertexAttributeDataType::F32,
-                        size: 3,
-                        divisor: 0,
-                        shader_location: 1,
-                        normalized: false,
-                    },
-                ],
-                positions.len(),
-                fyrox::scene::mesh::buffer::BytesStorage::new(vertex_data),
-            )
-            .unwrap(),
-            fyrox::scene::mesh::buffer::TriangleBuffer::new(
-                indices
-                    .chunks(3)
-                    .map(|tri| fyrox::core::math::TriangleDefinition([tri[0], tri[1], tri[2]]))
-                    .collect(),
-            ),
-        );
-
-        let stem_material = colored_material(Color::opaque(102, 66, 33));
-        MeshBuilder::new(BaseBuilder::new())
-            .with_surfaces(vec![SurfaceBuilder::new(SurfaceResource::new_ok(
-                ResourceKind::Embedded,
-                surface_data,
-            ))
-            .with_material(stem_material)
-            .build()])
-            .with_render_path(RenderPath::Forward)
-            .build(&mut scene.graph);
-    }
-
-    fn build_organ_meshes(&self, preview: &PlantPreviewData, scene: &mut Scene) {
-        let mesh = &preview.mesh;
-
-        // Build leaf markers as small cubes
-        for leaf in &mesh.leaf_instances {
-            let color = Color::opaque(
-                (leaf.color.r * 255.0) as u8,
-                (leaf.color.g * 255.0) as u8,
-                (leaf.color.b * 255.0) as u8,
-            );
-            self.build_box_marker(
-                scene,
-                to_fyrox_vec3(leaf.position),
-                leaf.scale * 0.15,
-                color,
-            );
-        }
-
-        // Build flower markers
-        for flower in &mesh.flower_instances {
-            let color = Color::opaque(
-                (flower.color.r * 255.0) as u8,
-                (flower.color.g * 255.0) as u8,
-                (flower.color.b * 255.0) as u8,
-            );
-            self.build_box_marker(
-                scene,
-                to_fyrox_vec3(flower.position),
-                flower.scale * 0.2,
-                color,
-            );
-        }
-
-        // Build fruit markers
-        for fruit in &mesh.fruit_instances {
-            let color = Color::opaque(
-                (fruit.color.r * 255.0) as u8,
-                (fruit.color.g * 255.0) as u8,
-                (fruit.color.b * 255.0) as u8,
-            );
-            self.build_box_marker(
-                scene,
-                to_fyrox_vec3(fruit.position),
-                fruit.scale * 0.2,
-                color,
-            );
-        }
-    }
-
-    fn build_box_marker(
-        &self,
-        scene: &mut Scene,
-        position: Vector3<f32>,
-        half_size: f32,
-        color: Color,
-    ) {
-        let surface_data = SurfaceData::make_cube(fyrox::core::algebra::Matrix4::new_scaling(
-            half_size,
-        ));
-
-        let material = colored_material(color);
-        MeshBuilder::new(
-            BaseBuilder::new().with_local_transform(
-                TransformBuilder::new()
-                    .with_local_position(position)
-                    .build(),
-            ),
-        )
-        .with_surfaces(vec![SurfaceBuilder::new(SurfaceResource::new_ok(
-            ResourceKind::Embedded,
-            surface_data,
-        ))
-        .with_material(material)
-        .build()])
-        .with_render_path(RenderPath::Forward)
         .build(&mut scene.graph);
     }
 
@@ -347,27 +218,39 @@ impl Plugin for PlantPreviewerPlugin {
     fn update(&mut self, _context: &mut PluginContext) {}
 }
 
+fn usage() -> ! {
+    eprintln!("Usage: plant_previewer [seed] [hub|distant|icon]");
+    eprintln!("  seed: integer seed for plant generation (default: current time)");
+    eprintln!("  tier: level-of-detail tier to build at (default: hub)");
+    std::process::exit(1);
+}
+
+fn parse_lod(name: &str) -> LodTier {
+    match name.to_ascii_lowercase().as_str() {
+        "hub" => LodTier::Hub,
+        "distant" => LodTier::Distant,
+        "icon" => LodTier::Icon,
+        _ => usage(),
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    let seed = if args.len() > 1 {
-        args[1].parse::<u64>().unwrap_or_else(|_| {
-            eprintln!("Usage: plant_previewer [seed]");
-            eprintln!("  seed: integer seed for plant generation (default: random)");
-            std::process::exit(1);
-        })
-    } else {
+    let seed = match args.get(1) {
+        Some(arg) => arg.parse::<u64>().unwrap_or_else(|_| usage()),
         // Use current time as default seed
-        std::time::SystemTime::now()
+        None => std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs()
+            .as_secs(),
     };
+    let lod = args.get(2).map(|a| parse_lod(a)).unwrap_or(LodTier::Hub);
 
-    println!("Plant Previewer - seed: {seed}");
+    println!("Plant Previewer - seed: {seed}, tier: {lod:?}");
 
     let mut window_attributes = WindowAttributes::default();
-    window_attributes.title = format!("Plant Previewer - Seed {seed}");
+    window_attributes.title = format!("Plant Previewer - Seed {seed} ({lod:?})");
     window_attributes.resizable = true;
 
     let mut executor = Executor::from_params(
@@ -380,6 +263,6 @@ fn main() {
         },
     );
 
-    executor.add_plugin(PlantPreviewerPlugin::new(seed));
+    executor.add_plugin(PlantPreviewerPlugin::new(seed, lod));
     executor.run();
 }
