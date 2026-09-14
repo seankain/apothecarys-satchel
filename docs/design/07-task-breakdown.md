@@ -55,7 +55,27 @@ Phase 7: Tooling                     │
   T7.3 Animation Viewer ◄─── T1.3
   T7.4 Dialogue Tester ◄──── T3.4
   T7.5 Plant Previewer ◄──── T5.5
+                                     │
+Phase 8: PlantGL Port                │
+  A ── T8.1 Crate + Licensing ◄───── T5.5
+       T8.2 Math, Frames, Scene Graph ◄ T8.1
+       T8.3 OBJ + Golden Harness ◄─── T8.2
+  B ── T8.4 Parametric Primitives ◄── T8.3
+       T8.5 Discretizer/Tessellator/Measure ◄ T8.4
+  C ── T8.6 Bézier + NURBS Curves & Patches ◄ T8.5
+       T8.7 Extrusion (generalized cylinder) ◄ T8.6
+  D ── T8.8 Turtle Core + GC + Polygons ◄ T8.7
+       T8.9 Guides, Tropism, Drawers ◄ T8.8
+  E ── T8.10 Rewire crates/botany ◄── T8.9, T5.5
+       T8.11 Fyrox Bridge + Previewer ◄ T8.10, T7.5
+       T8.12 Documentation ◄───────── T8.11
+  F ── T8.13–T8.17 Optional extras ◄─ T8.12
 ```
+
+Phase 8 is a *replacement*, not an extension: T8.10 deletes
+`crates/botany/src/turtle.rs` and T8.12 deletes `PlantMeshData`, so T5.4's and
+T5.5's deliverables are superseded by `crates/plantgl` and
+`crates/botany/src/interpret.rs`. See `08-plantgl-port.md`.
 
 ---
 
@@ -588,6 +608,11 @@ Phase 7: Tooling                     │
 
 ### T5.4 — Turtle Interpreter
 
+> **Superseded by T8.8–T8.10.** `crates/botany/src/turtle.rs` was deleted in
+> Phase E of the PlantGL port; the turtle is now
+> `plantgl::modelling::turtle`, driven by `crates/botany/src/interpret.rs`.
+> The steps below record what shipped originally.
+
 **Deliverable**: 3D turtle that interprets L-system strings into mesh placement data.
 
 **Steps**:
@@ -610,6 +635,12 @@ Phase 7: Tooling                     │
 ---
 
 ### T5.5 — Plant Mesh Generation
+
+> **Superseded by T8.10–T8.12.** `PlantMeshData` was deleted in Phase E;
+> the pipeline now ends in a `plantgl::Scene` converted by
+> `crates/botany/src/fyrox_bridge.rs`, and the organ templates are generated
+> procedurally rather than loaded from `assets/models/plants/`. The steps
+> below record what shipped originally.
 
 **Deliverable**: Complete pipeline from genotype → L-system → turtle → Fyrox scene nodes.
 
@@ -939,6 +970,18 @@ Phase 7: Tooling                     │
 | T7.3 Animation Viewer | 7 | Med | T1.3 | T7.1, T7.2, T7.4 |
 | T7.4 Dialogue Tester | 7 | Med | T3.4 | T7.1, T7.2, T7.3 |
 | T7.5 Plant Previewer | 7 | High | T5.5 | T7.1–T7.4 |
+| T8.1 Crate + Licensing | 8 | Med | T5.5 | — |
+| T8.2 Math, Frames, Scene Graph | 8 | High | T8.1 | — |
+| T8.3 OBJ + Golden Harness | 8 | Med | T8.2 | — |
+| T8.4 Parametric Primitives | 8 | High | T8.3 | — |
+| T8.5 Discretizer / Tessellator / Measure | 8 | High | T8.4 | — |
+| T8.6 Bézier + NURBS Curves & Patches | 8 | High | T8.5 | — |
+| T8.7 Extrusion | 8 | High | T8.6 | — |
+| T8.8 Turtle Core, GC, Polygons | 8 | High | T8.7 | — |
+| T8.9 Guides, Tropism, Drawers | 8 | Med | T8.8 | — |
+| T8.10 Rewire `crates/botany` | 8 | Med | T8.9, T5.5 | — |
+| T8.11 Fyrox Bridge + Previewer | 8 | Med | T8.10, T7.5 | — |
+| T8.12 Documentation Reconciliation | 8 | Low | T8.11 | — |
 
 ## Recommended Execution Order for Maximum Parallelism
 
@@ -975,3 +1018,14 @@ Phase 7: Tooling                     │
 ### Sprint 7 (Integration + Tooling)
 - T6.2 + T6.3 (parallel)
 - T7.1 + T7.2 + T7.5 (tooling, parallel)
+
+### Sprint 8 (PlantGL Port)
+Strictly sequential — each phase builds on the layer below it.
+- T8.1 → T8.2 → T8.3 (Phase A: crate, licensing, scene graph, OBJ)
+- T8.4 → T8.5 (Phase B: primitives and the pipeline over them)
+- T8.6 → T8.7 (Phase C: curves, patches, `Extrusion`)
+- T8.8 → T8.9 (Phase D: the 3D turtle)
+- T8.10 → T8.11 → T8.12 (Phase E: rewire, bridge, docs)
+
+See `08-plantgl-port.md` for the phase table, the licensing decision and the
+performance budget.

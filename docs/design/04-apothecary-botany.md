@@ -138,24 +138,33 @@ pub struct PlantPhenotype {
     pub branch_thickness: f32,        // Radius (0.01–0.1)
     pub branching_factor: u32,        // Branches per node (1–4)
 
+    // Stem parameters — the shape of the swept axis itself (added by #21)
+    pub cross_section_index: usize,   // Round, square, triangular, fluted
+    pub taper_curve: TaperCurve,      // How fast a stem narrows per segment
+    pub tropism_elasticity: f32,      // How far a segment gives to gravity
+    pub axis_curvature: f32,          // Degrees of pitch per drawn segment
+
     // Leaf parameters
-    pub leaf_mesh_index: usize,       // Index into leaf template meshes
-    pub leaf_scale: Vector3<f32>,
-    pub leaf_color: Color,
+    pub leaf_mesh_index: usize,       // Index into the organ surface library
+    pub leaf_scale: f32,
+    pub leaf_color: PlantColor,
     pub leaves_per_segment: u32,
 
     // Flower parameters
     pub produces_flowers: bool,
     pub petal_count: u32,
     pub petal_mesh_index: usize,
-    pub petal_color: Color,
+    pub petal_color: PlantColor,
     pub petal_scale: f32,
 
     // Fruit parameters
     pub produces_fruit: bool,
     pub fruit_mesh_index: usize,
-    pub fruit_color: Color,
+    pub fruit_color: PlantColor,
     pub fruit_scale: f32,
+
+    /// Which quality tier to build at. Not genetic — the caller sets it.
+    pub lod_tier: LodTier,
 }
 
 pub fn express_phenotype(genotype: &PlantGenotype) -> PlantPhenotype {
@@ -170,6 +179,14 @@ pub fn express_phenotype(genotype: &PlantGenotype) -> PlantPhenotype {
 
 **Task Goal**: Implement phenotype expression as a pure function from genotype to visual parameters. This function is deterministic — same genotype always produces same phenotype.
 
+The four stem traits #21 added have no gene of their own: widening
+`PlantGenotype` would invalidate every save and every stored breeding pair, so
+each rides the gene nearest it in meaning. The cross-section profile and the
+tropism elasticity ride `stem_thickness` — a thin stem is a floppy one — the
+taper curve rides `internode_length`, and the axis curvature rides
+`stem_height`, the one morphology gene the earlier phenotype never expressed.
+`express_phenotype` documents each mapping at the call site.
+
 ## L-System Procedural Plant Generation
 
 ### Background
@@ -179,7 +196,8 @@ The L-system engine is inspired by **vlab** and **L-studio** (algorithmic botany
 1. **Alphabet**: Symbols representing plant parts (`F` = forward/stem, `+`/`-` = turn, `[`/`]` = push/pop, `L` = leaf, `W` = flower, `R` = fruit)
 2. **Axiom**: Starting string
 3. **Production Rules**: Rewriting rules applied iteratively
-4. **Turtle Interpretation**: Convert final string to 3D geometry
+4. **Turtle Interpretation**: Convert final string to 3D geometry — done by
+   `crates/plantgl` since Phase E of the PlantGL port; see below.
 
 ### L-System Engine
 
@@ -197,11 +215,19 @@ pub enum LSymbol {
     RollRight(f32),     // \(angle)
     Push,               // [ — save state
     Pop,                // ] — restore state
-    Leaf,               // L — place leaf
-    Flower,             // W — place flower
-    Fruit,              // R — place fruit
+    Leaf,               // L — a leaf of the phenotype's own shape (pre-#21)
+    Flower,             // W — a flower of the phenotype's own petal count
+    Fruit,              // R — a fruit of the phenotype's own shape
     Width(f32),         // !(width) — set stem width
     Apex,               // A — growth apex (replaced by rules)
+
+    // Added by Phase E of the PlantGL port (#21). The rewriting engine below
+    // is unchanged: these are symbols the *interpreter* acts on.
+    StartGC,                   // open a swept axis
+    StopGC,                    // close it and draw it
+    SetCrossSection(usize),    // the profile to sweep; 0 is the round default
+    SetTropism(f32),           // elasticity towards gravity
+    Surface(SurfaceId, f32),   // a named organ template, scaled
 }
 
 #[derive(Debug)]
@@ -219,35 +245,64 @@ pub struct LSystem {
 impl LSystem {
     /// Build an L-system from phenotype parameters
     pub fn from_phenotype(phenotype: &PlantPhenotype) -> Self {
-        // Generate rules parameterized by phenotype values
         let angle = phenotype.branch_angle;
         let length = phenotype.branch_length;
+        // 180° for a two-ranked plant, then 120°, 90°, 72°.
+        let divergence = 360.0 / (phenotype.branching_factor + 1) as f32;
 
+        // The fertile rules come FIRST. `find_matching_rule` accumulates the
+        // matching rules' probabilities in order, so a rule behind one of
+        // probability 1.0 can never be reached — which is why no plant grew a
+        // flower before #21. Each also ends in an `Apex`, so a node that
+        // flowers is still a node that grows.
         let rules = vec![
-            // Apex grows into a stem segment and branches
             ProductionRule {
                 predecessor: LSymbol::Apex,
                 successor: vec![
-                    LSymbol::Width(phenotype.branch_thickness),
-                    LSymbol::Forward(length),
+                    // A flower on a short stalk, then carry on growing.
                     LSymbol::Push,
-                    LSymbol::TurnLeft(angle),
-                    LSymbol::Leaf,
-                    LSymbol::Apex,
+                    LSymbol::TurnLeft(PEDUNCLE_ANGLE),
+                    LSymbol::Forward(length * 0.45),
+                    /* petal_count × [ roll, pitch, Surface(Petal) ] */
                     LSymbol::Pop,
-                    LSymbol::Push,
-                    LSymbol::TurnRight(angle),
-                    LSymbol::Leaf,
                     LSymbol::Apex,
-                    LSymbol::Pop,
                 ],
-                probability: 1.0,
+                probability: 0.18,
             },
-            // Additional rules for flowers, fruit, branching variants...
+            /* the fruit rule, the same shape */
+            ProductionRule {
+                predecessor: LSymbol::Apex,
+                successor: vec![
+                    LSymbol::Forward(length),
+                    /* leaves_per_segment × [ roll, pitch, Surface(Leaf) ] */
+                    LSymbol::Push,
+                    LSymbol::RollLeft(divergence),
+                    LSymbol::TurnLeft(angle),
+                    LSymbol::PitchUp(angle * 0.5),
+                    LSymbol::Apex,
+                    LSymbol::Pop,
+                    // The axis CONTINUES. This is what joins consecutive
+                    // internodes into one sweep; two pushed branches would
+                    // leave every `Forward` alone between a `Push` and a `Pop`.
+                    LSymbol::RollLeft(divergence),
+                    LSymbol::Apex,
+                ],
+                probability: 1.0 - 0.18 - 0.12,
+            },
         ];
 
         LSystem {
-            axiom: vec![LSymbol::Apex],
+            // The profile and the tropism are set before the sweep opens: a
+            // generalized cylinder is drawn with the parameters it was
+            // *opened* with.
+            axiom: vec![
+                LSymbol::SetCrossSection(phenotype.cross_section_index),
+                LSymbol::SetTropism(phenotype.tropism_elasticity),
+                LSymbol::Width(phenotype.branch_thickness),
+                LSymbol::StartGC,
+                LSymbol::Apex,
+                LSymbol::StopGC,
+            ],
             rules,
         }
     }
@@ -277,127 +332,183 @@ impl LSystem {
 
 **Task Goal**: Implement the L-system string rewriting engine. Support parameterized symbols, stochastic rules, and context-sensitive rules (for vlab compatibility). Must be deterministic given the same RNG seed.
 
-### Turtle Interpretation → 3D Mesh
+`derive` draws from the RNG only for a symbol some rule matches, so the
+derivation is reproducible from a seed and a capped derivation is a prefix of a
+deeper one. That is what the LOD tiers and the save format both rest on.
+
+### Turtle Interpretation → 3D Geometry
+
+Interpretation does **not** live in `crates/botany` any more. Phase E of the
+PlantGL port (#21) deleted `crates/botany/src/turtle.rs` — its `Vec3`, its
+axis-angle rotation and its `TurtleInterpreter` — and moved the whole job onto
+`crates/plantgl`, the Rust translation of
+[openalea/plantgl](https://github.com/openalea/plantgl). See
+`docs/design/08-plantgl-port.md` for the port itself.
+
+The division of labour is the L-Py ↔ PlantGL boundary upstream draws:
+
+| Crate | Knows | Licence |
+|---|---|---|
+| `crates/botany` | genetics, phenotype, the alphabet, the production rules, which organ goes where | MIT |
+| `crates/plantgl` | the frame, the stack, sweeps, patches, discretisation, tessellation, measurement, OBJ | CeCILL-C |
+
+`crates/botany/src/interpret.rs` is the `match` between them: it walks a
+derived string and calls `plantgl::modelling::Turtle`. Nothing translated from
+PlantGL may be copied across that line — that is what keeps `botany` MIT.
 
 ```rust
-// crates/botany/src/turtle.rs
+// crates/botany/src/interpret.rs
 
-pub struct TurtleState {
-    pub position: Vector3<f32>,
-    pub heading: Vector3<f32>,      // Forward direction
-    pub left: Vector3<f32>,         // Left direction
-    pub up: Vector3<f32>,           // Up direction
-    pub width: f32,                 // Current stem width
-}
-
-pub struct TurtleInterpreter {
-    state: TurtleState,
-    stack: Vec<TurtleState>,
-    mesh_builder: PlantMeshBuilder,
-}
-
-impl TurtleInterpreter {
-    /// Interpret L-system string into mesh data
-    pub fn interpret(
-        &mut self,
-        symbols: &[LSymbol],
-        phenotype: &PlantPhenotype,
-    ) -> PlantMeshData {
-        for symbol in symbols {
-            match symbol {
-                LSymbol::Forward(len) => {
-                    let start = self.state.position;
-                    self.state.position += self.state.heading * len;
-                    self.mesh_builder.add_stem_segment(
-                        start,
-                        self.state.position,
-                        self.state.width,
-                    );
-                }
-                LSymbol::TurnLeft(angle) => self.rotate_heading(*angle, self.state.up),
-                LSymbol::TurnRight(angle) => self.rotate_heading(-angle, self.state.up),
-                LSymbol::Push => self.stack.push(self.state.clone()),
-                LSymbol::Pop => self.state = self.stack.pop().unwrap(),
-                LSymbol::Leaf => {
-                    self.mesh_builder.add_leaf_instance(
-                        self.state.position,
-                        self.state.heading,
-                        phenotype.leaf_mesh_index,
-                        phenotype.leaf_scale,
-                        phenotype.leaf_color,
-                    );
-                }
-                LSymbol::Flower if phenotype.produces_flowers => {
-                    self.mesh_builder.add_flower_instance(
-                        self.state.position,
-                        phenotype.petal_count,
-                        phenotype.petal_color,
-                        phenotype.petal_scale,
-                    );
-                }
-                LSymbol::Fruit if phenotype.produces_fruit => {
-                    self.mesh_builder.add_fruit_instance(
-                        self.state.position,
-                        phenotype.fruit_mesh_index,
-                        phenotype.fruit_color,
-                        phenotype.fruit_scale,
-                    );
-                }
-                _ => {}
+pub fn interpret<D: TurtleDrawer>(
+    turtle: &mut Turtle<D>,
+    symbols: &[LSymbol],
+    phenotype: &PlantPhenotype,
+) -> Result<PlantStats> {
+    for symbol in symbols {
+        match symbol {
+            // Inside a sweep an `F` records a ring rather than drawing a tube,
+            // and narrows the axis by the phenotype's taper ratio.
+            LSymbol::Forward(length) => {
+                turtle.forward_tapered(*length, turtle.width() * taper)?;
+                turtle.down(phenotype.axis_curvature);
             }
+            LSymbol::TurnLeft(angle) => turtle.left(*angle),
+            LSymbol::Push => turtle.push(),
+            LSymbol::Pop => turtle.pop()?,
+            LSymbol::StartGC => turtle.start_gc(),
+            LSymbol::StopGC => turtle.stop_gc()?,
+            LSymbol::Surface(id, scale) => turtle.surface(id.name(), *scale)?,
+            /* … */
         }
-        self.mesh_builder.build()
     }
 }
 ```
+
+Being generic over `TurtleDrawer` means one derived string can produce three
+different things without re-deriving it:
+
+- `SceneDrawer` → a `plantgl::Scene` of parametric shapes. Inspectable,
+  exportable, re-tessellatable at another density. This is what
+  `PlantModel::scene` holds.
+- `MeshDrawer` → one merged `TriangleSet` per appearance, skipping the scene
+  graph. The renderer's path.
+- `MeasureDrawer` → surface area, volume, bounding box and segment count,
+  allocating almost nothing. **Harvest yield without building a mesh**, which
+  is what ties the reward to the phenotype the player can see.
+
+### Generalized cylinders: why the stems changed shape
+
+The old interpreter emitted one `StemSegment` per internode and the old mesh
+builder turned each into a two-ring cylinder. Consecutive internodes therefore
+met at a hard seam, with no mitre and no shared width, and a plant read as a
+stack of cans.
+
+`LSystem::from_phenotype` now wraps the whole plant in `StartGC` … `StopGC`,
+and the growth rule *continues* its axis with a bare `Apex` instead of ending
+in two pushed branches. Between `StartGC` and `StopGC` a `Forward` records a
+point, a `left` vector and a width rather than drawing anything; the turtle
+sweeps the accumulated run as one `plantgl::Extrusion` under
+rotation-minimising frames, and splits the sweep by itself at every
+`Push`/`Pop`. One branch is one continuous, mitred, tapering surface.
+
+Sweeps do not nest — a second `StartGC` inside an open one discards the axis so
+far — which is why there is exactly one pair, in the axiom, and why the
+cross-section and the tropism are set before it: a sweep is drawn with the
+parameters it was *opened* with.
+
+### Organ surfaces
+
+Leaves, petals and fruit are no longer marker instances to be swapped for art
+assets later. `crates/botany/src/surfaces.rs` builds them procedurally into a
+`plantgl::SurfaceLibrary`, and the L-system places them with
+`LSymbol::Surface(SurfaceId, scale)`:
+
+| Kind | Shape | Indexed by |
+|---|---|---|
+| Leaf | 4×4 Bézier patch, cupped across and drooping along | `leaf_mesh_index` (5 outlines) |
+| Petal | the same, shorter and cupped harder | `petal_mesh_index` (3 outlines) |
+| Fruit | a scaled sphere of revolution | `fruit_mesh_index` (4 bodies) |
+
+Each is modelled in the turtle's local frame — running from `z = 0` at its
+attachment to `z = 1` at its tip — which is the convention upstream's default
+`"l"` leaf uses, so a surface written here drops into a cpfg program unchanged.
+
+Because a patch is parametric, the same library at a coarser LOD tier is the
+same shape sampled less finely, not a different mesh.
 
 ### Mesh Construction
 
+`PlantMeshData` is gone. `crates/botany/src/mesh_gen.rs` is a re-export facade
+over `interpret`, and the type a caller gets back is `PlantModel`:
+
 ```rust
-// crates/botany/src/mesh_gen.rs
+// crates/botany/src/interpret.rs
 
-pub struct PlantMeshData {
-    pub stem_vertices: Vec<Vertex>,
-    pub stem_indices: Vec<u32>,
-    pub leaf_instances: Vec<MeshInstance>,    // Instanced rendering of leaf template
-    pub flower_instances: Vec<MeshInstance>,
-    pub fruit_instances: Vec<MeshInstance>,
+pub struct PlantModel {
+    pub scene: plantgl::Scene,      // one shape per swept axis and per organ
+    pub phenotype: PlantPhenotype,  // tier included
+    pub stats: PlantStats,          // segments, leaves, petals, fruit
+    pub symbols: Vec<LSymbol>,      // kept, so it can be measured or re-drawn
 }
 
-pub struct MeshInstance {
-    pub template_index: usize,    // Which base mesh to instance
-    pub transform: Matrix4<f32>,  // Position, rotation, scale
-    pub color: Color,             // Tint color
-}
-
-impl PlantMeshData {
-    /// Convert to Fyrox scene nodes
-    pub fn to_scene_nodes(&self, scene: &mut Scene, templates: &PlantTemplates) -> Handle<Node> {
-        // Create parent node for the plant
-        // Add stem mesh (custom geometry from vertices/indices)
-        // Add instanced leaf/flower/fruit meshes using templates
-    }
+impl PlantModel {
+    pub fn batches(&self) -> Result<Vec<MeshBatch>>;   // merged by appearance
+    pub fn triangle_count(&self) -> Result<usize>;
+    pub fn measures(&self) -> Result<Measures>;        // area, volume, bbox
+    pub fn to_obj(&self, mtl: &str) -> Result<ObjFiles>;
 }
 ```
 
-**Task Goal**: Implement turtle interpretation and mesh construction. Stem segments are generated as cylinder geometry between turtle positions. Leaves, flowers, and fruits are placed as instanced copies of template meshes loaded from `assets/models/plants/`.
+Shapes are merged by appearance **before** conversion, so a plant reaches the
+renderer as at most four draw calls — stem, leaf, petal, fruit — rather than
+one per leaf. `crates/botany/src/fyrox_bridge.rs` does the conversion:
+`TriangleSet` is already structure-of-arrays and `plantgl`'s `real_t` is `f32`,
+so it is a repack into Fyrox's interleaved `StaticVertex` plus an index map,
+with no numeric conversion.
 
-### Porting from vlab/L-studio
+Measurement goes back to the turtle rather than to the mesh, and is computed on
+first use. That is not an optimisation: a turtle's tubes are drawn open —
+upstream never caps them — so their meshes enclose no volume at all, while the
+volume of the stem is exactly what a yield model wants. `MeasureDrawer` sums it
+as though the ends were closed.
 
-Key C++ components to port:
+### Level of detail
 
-| vlab/L-studio Component | Rust Equivalent | Notes |
-|--------------------------|-----------------|-------|
-| `LEngine` (string rewriting) | `crates/botany/src/lsystem.rs` | Core rewriting; support parametric & stochastic rules |
-| `Turtle` (3D interpretation) | `crates/botany/src/turtle.rs` | 3D turtle with heading/up/left vectors |
-| `Surface` (mesh generation) | `crates/botany/src/mesh_gen.rs` | Generalized cylinders for stems |
-| `Environment` (tropisms) | Optional: gravitropism, phototropism | Bend stems toward/away from direction vectors |
+`crates/botany/src/lod.rs` defines three tiers, each fixing four things at
+once: how many derivation steps the L-system takes, how many facets a swept
+stem has, how finely an organ patch is sampled, and whether organs are drawn at
+all.
 
-The port does **not** need to be complete — focus on:
-1. Parametric L-systems with stochastic rules
-2. 3D turtle interpretation
-3. Generalized cylinder stem generation
-4. Instanced organ placement (leaves, flowers, fruit)
+| Tier | Iterations | Section | Patch | Organs | Triangle budget |
+|---|---|---|---|---|---|
+| `Hub` | 6 | 10 | 5×4 | yes | < 12 000 |
+| `Distant` | 5 | 5 | 3×2 | yes | < 1 500 |
+| `Icon` | 3 | 3 | 2×2 | no | < 400 |
+
+Capping the derivation is the only lever with real leverage at the low end —
+no tessellation density takes a 300-leaf plant under 400 triangles. Because
+`LSystem::derive` re-derives from the axiom and consumes the RNG in iteration
+order, a capped derivation is the *prefix* of the uncapped one for the same
+seed: the icon is a smaller version of the same plant, not a different plant.
+
+`crates/botany/tests/budget.rs` enforces the budgets, and
+`crates/botany/tests/golden.rs` snapshots the OBJ output for five seeds, with
+the pre-port baseline kept alongside under `tests/golden/pre-plantgl/`.
+
+### Where this leaves vlab/L-studio
+
+The original plan was to port the pieces of vlab/L-studio the game needed. It
+went to PlantGL instead, which is the same research lineage — CIRAD/INRIA/INRA
+rather than Calgary — but is CeCILL-C rather than unlicensed, is still
+maintained, and ships the parts that are hard to get right. `08-plantgl-port.md`
+records why. What that table used to promise now maps like this:
+
+| vlab/L-studio component | Where it lives | Notes |
+|---|---|---|
+| `LEngine` (string rewriting) | `crates/botany/src/lsystem.rs` | Parametric and stochastic rules, unchanged by the port |
+| `Turtle` (3D interpretation) | `plantgl::modelling::turtle`, driven by `crates/botany/src/interpret.rs` | The full cpfg/L-studio command set |
+| `Surface` (mesh generation) | `plantgl::Extrusion` for stems, `plantgl::BezierPatch` for organs | Generalized cylinders under rotation-minimising frames |
+| `Environment` (tropisms) | `Turtle::set_tropism` / `set_elasticity`, from `PlantPhenotype::tropism_elasticity` | Gravitropism today; a light direction is the same call |
 
 ## Genotype → Alchemy Effect Mapping
 
@@ -666,8 +777,12 @@ pub enum ItemType {
 | `crates/botany/src/genetics.rs` | Genotype, genes, crossover, mutation |
 | `crates/botany/src/phenotype.rs` | Genotype → visual parameter mapping |
 | `crates/botany/src/lsystem.rs` | L-system string rewriting engine |
-| `crates/botany/src/turtle.rs` | 3D turtle interpreter |
-| `crates/botany/src/mesh_gen.rs` | Plant mesh construction |
+| `crates/botany/src/interpret.rs` | L-symbol → `plantgl` turtle dispatch |
+| `crates/botany/src/surfaces.rs` | Procedural leaf/petal/fruit templates and stem profiles |
+| `crates/botany/src/lod.rs` | Quality tiers and their triangle budgets |
+| `crates/botany/src/fyrox_bridge.rs` | `plantgl` geometry → Fyrox scene nodes (feature `fyrox`) |
+| `crates/botany/src/mesh_gen.rs` | Re-export facade over `interpret` |
+| `crates/plantgl/` | Geometry and turtle modelling, ported from PlantGL (CeCILL-C) |
 | `crates/botany/src/stat_mapping.rs` | Genetics → alchemy effect mapping |
 | `crates/inventory/src/container.rs` | Inventory containers |
 | `crates/inventory/src/crafting.rs` | Recipe resolution, potion creation |

@@ -1,4 +1,5 @@
 use crate::genetics::PlantGenotype;
+use crate::lod::LodTier;
 use serde::{Deserialize, Serialize};
 
 /// RGBA color representation for plant parts.
@@ -43,6 +44,64 @@ impl PlantColor {
     }
 }
 
+/// How sharply a stem narrows from one internode to the next.
+///
+/// The turtle can follow an arbitrary radius profile along an axis
+/// (`Turtle::n_forward_tapered` with a `QuantisedFunction`), but an L-system
+/// axis is not known to be any particular length when its first segment is
+/// drawn — the apex may yet be rewritten. So the taper is expressed as the
+/// ratio between consecutive segments instead, which is well defined however
+/// long the axis turns out to be and compounds to the same exponential
+/// narrowing a real stem has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TaperCurve {
+    /// No narrowing at all — a reed.
+    Cylindrical,
+    /// A gentle narrowing, the default for a herb.
+    #[default]
+    Gentle,
+    /// A woody stem, visibly thinner at every order of branching.
+    Strong,
+    /// A whip: the tip is a fraction of the base.
+    Whiplike,
+}
+
+impl TaperCurve {
+    /// How many curves there are, so a gene can be mapped onto them.
+    pub const COUNT: usize = 4;
+
+    /// By index, clamped. The index is the "taper curve id" a phenotype
+    /// carries and a save file stores.
+    pub fn from_index(index: usize) -> Self {
+        match index {
+            0 => TaperCurve::Cylindrical,
+            1 => TaperCurve::Gentle,
+            2 => TaperCurve::Strong,
+            _ => TaperCurve::Whiplike,
+        }
+    }
+
+    /// The index [`TaperCurve::from_index`] round-trips.
+    pub fn index(self) -> usize {
+        match self {
+            TaperCurve::Cylindrical => 0,
+            TaperCurve::Gentle => 1,
+            TaperCurve::Strong => 2,
+            TaperCurve::Whiplike => 3,
+        }
+    }
+
+    /// The width of the next segment as a fraction of this one's.
+    pub fn segment_ratio(self) -> f32 {
+        match self {
+            TaperCurve::Cylindrical => 1.0,
+            TaperCurve::Gentle => 0.94,
+            TaperCurve::Strong => 0.86,
+            TaperCurve::Whiplike => 0.76,
+        }
+    }
+}
+
 /// All visual parameters derived from a genotype.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlantPhenotype {
@@ -53,6 +112,20 @@ pub struct PlantPhenotype {
     pub branch_thickness: f32,
     pub branching_factor: u32,
 
+    // Stem parameters — the shape of the swept axis itself
+    /// Which profile the stem is swept from; see
+    /// [`surfaces::cross_section`](crate::surfaces::cross_section). Index 0 is
+    /// the round default.
+    pub cross_section_index: usize,
+    /// How fast the stem narrows from segment to segment.
+    pub taper_curve: TaperCurve,
+    /// How strongly each forward move bends towards gravity — the turtle's
+    /// `setElasticity`. Zero switches tropism off.
+    pub tropism_elasticity: f32,
+    /// Degrees of pitch applied after each drawn segment, which is what makes
+    /// an axis arc rather than run dead straight.
+    pub axis_curvature: f32,
+
     // Leaf parameters
     pub leaf_mesh_index: usize,
     pub leaf_scale: f32,
@@ -62,6 +135,7 @@ pub struct PlantPhenotype {
     // Flower parameters
     pub produces_flowers: bool,
     pub petal_count: u32,
+    pub petal_mesh_index: usize,
     pub petal_color: PlantColor,
     pub petal_scale: f32,
 
@@ -70,6 +144,25 @@ pub struct PlantPhenotype {
     pub fruit_mesh_index: usize,
     pub fruit_color: PlantColor,
     pub fruit_scale: f32,
+
+    /// The quality tier this plant is to be built at. Not genetic — the
+    /// caller sets it; [`express_phenotype`] leaves it at
+    /// [`LodTier::Hub`](crate::lod::LodTier::Hub).
+    pub lod_tier: LodTier,
+}
+
+impl PlantPhenotype {
+    /// The same phenotype at another quality tier.
+    pub fn with_lod(mut self, tier: LodTier) -> Self {
+        self.lod_tier = tier;
+        self
+    }
+
+    /// How many derivation steps this phenotype takes at its tier — its
+    /// `axiom_complexity`, capped by [`LodTier::max_iterations`].
+    pub fn iterations(&self) -> u32 {
+        self.axiom_complexity.min(self.lod_tier.max_iterations())
+    }
 }
 
 /// Map a value from [0, 1] to an integer range [min, max].
@@ -102,7 +195,29 @@ fn map_fruit_shape(value: f32) -> usize {
     (value.clamp(0.0, 1.0) * 3.0).round() as usize
 }
 
+/// Map a value in [0, 1] onto `0..count`.
+fn map_index(value: f32, count: usize) -> usize {
+    debug_assert!(count > 0);
+    (value.clamp(0.0, 1.0) * (count - 1) as f32).round() as usize
+}
+
 /// Express a genotype as visual phenotype parameters. This is a pure, deterministic function.
+///
+/// # Where the stem traits come from
+///
+/// Phase E (#21) added four stem traits that no gene was written for, because
+/// the earlier generator had no way to render them. Rather than widen
+/// [`PlantGenotype`] — which would invalidate every save and every stored
+/// breeding pair — each rides the gene nearest to it in meaning:
+///
+/// - **cross-section profile** and **tropism elasticity** ride
+///   `stem_thickness`. Both are stem traits, and the second is the honest
+///   relationship: a thin stem is a floppy one, so it bends further towards
+///   gravity per unit of travel.
+/// - **taper curve** rides `internode_length`. A plant that puts long gaps
+///   between its nodes narrows faster over the same number of them.
+/// - **axis curvature** rides `stem_height`, the one morphology gene the
+///   earlier phenotype never expressed. A tall axis arcs under its own length.
 pub fn express_phenotype(genotype: &PlantGenotype) -> PlantPhenotype {
     let leaf_hue = map_range_f32(genotype.leaf_color_hue.express(), 60.0, 150.0); // green range
     let leaf_sat = map_range_f32(genotype.leaf_color_saturation.express(), 0.3, 1.0);
@@ -110,12 +225,22 @@ pub fn express_phenotype(genotype: &PlantGenotype) -> PlantPhenotype {
     let petal_hue = map_range_f32(genotype.petal_color_hue.express(), 0.0, 360.0);
     let fruit_hue = map_range_f32(genotype.fruit_color_hue.express(), 0.0, 360.0);
 
+    let thickness = genotype.stem_thickness.express();
+
     PlantPhenotype {
         axiom_complexity: map_range_u32(genotype.branching_density.express(), 1, 6),
         branch_angle: map_range_f32(genotype.branching_angle.express(), 15.0, 60.0),
         branch_length: map_range_f32(genotype.internode_length.express(), 0.1, 2.0),
-        branch_thickness: map_range_f32(genotype.stem_thickness.express(), 0.01, 0.1),
+        branch_thickness: map_range_f32(thickness, 0.01, 0.1),
         branching_factor: map_range_u32(genotype.branching_density.express(), 1, 4),
+
+        cross_section_index: map_index(thickness, crate::surfaces::CROSS_SECTIONS),
+        taper_curve: TaperCurve::from_index(map_index(
+            genotype.internode_length.express(),
+            TaperCurve::COUNT,
+        )),
+        tropism_elasticity: map_range_f32(1.0 - thickness, 0.0, 0.22),
+        axis_curvature: map_range_f32(genotype.stem_height.express(), 0.0, 6.0),
 
         leaf_mesh_index: map_leaf_shape(genotype.leaf_shape.express()),
         leaf_scale: map_range_f32(genotype.leaf_size.express(), 0.2, 1.5),
@@ -124,6 +249,10 @@ pub fn express_phenotype(genotype: &PlantGenotype) -> PlantPhenotype {
 
         produces_flowers: genotype.has_flowers.express() > 0.5,
         petal_count: map_petal_count(genotype.petal_count.express()),
+        petal_mesh_index: map_index(
+            genotype.flower_density.express(),
+            crate::surfaces::PETAL_SHAPES,
+        ),
         petal_color: PlantColor::from_hsv(petal_hue, 0.8, 0.9),
         petal_scale: map_range_f32(genotype.petal_size.express(), 0.1, 0.5),
 
@@ -131,6 +260,8 @@ pub fn express_phenotype(genotype: &PlantGenotype) -> PlantPhenotype {
         fruit_mesh_index: map_fruit_shape(genotype.fruit_shape.express()),
         fruit_color: PlantColor::from_hsv(fruit_hue, 0.7, 0.8),
         fruit_scale: map_range_f32(genotype.fruit_size.express(), 0.1, 0.6),
+
+        lod_tier: LodTier::default(),
     }
 }
 
@@ -169,7 +300,49 @@ mod tests {
             assert!((0.1..=0.5).contains(&p.petal_scale));
             assert!(p.fruit_mesh_index <= 3);
             assert!((0.1..=0.6).contains(&p.fruit_scale));
+
+            assert!(p.cross_section_index < crate::surfaces::CROSS_SECTIONS);
+            assert!(p.petal_mesh_index < crate::surfaces::PETAL_SHAPES);
+            assert!((0.0..=0.22).contains(&p.tropism_elasticity));
+            assert!((0.0..=6.0).contains(&p.axis_curvature));
+            assert_eq!(p.lod_tier, LodTier::Hub);
         }
+    }
+
+    #[test]
+    fn test_taper_curve_index_round_trips() {
+        for index in 0..TaperCurve::COUNT {
+            assert_eq!(TaperCurve::from_index(index).index(), index);
+        }
+        // Past the end clamps to the last curve rather than panicking.
+        assert_eq!(TaperCurve::from_index(99), TaperCurve::Whiplike);
+    }
+
+    #[test]
+    fn test_taper_ratios_are_ordered_and_bounded() {
+        let mut previous = f32::INFINITY;
+        for index in 0..TaperCurve::COUNT {
+            let ratio = TaperCurve::from_index(index).segment_ratio();
+            assert!((0.0..=1.0).contains(&ratio));
+            assert!(ratio < previous, "curve {index} does not taper harder");
+            previous = ratio;
+        }
+    }
+
+    #[test]
+    fn test_lod_tier_caps_the_derivation() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let genotype = PlantGenotype::random_wild(&mut rng);
+        let mut phenotype = express_phenotype(&genotype);
+        phenotype.axiom_complexity = 6;
+
+        assert_eq!(phenotype.clone().with_lod(LodTier::Hub).iterations(), 6);
+        assert_eq!(phenotype.clone().with_lod(LodTier::Distant).iterations(), 5);
+        assert_eq!(phenotype.clone().with_lod(LodTier::Icon).iterations(), 3);
+
+        // A phenotype that asks for less than the tier allows keeps its own.
+        phenotype.axiom_complexity = 2;
+        assert_eq!(phenotype.with_lod(LodTier::Hub).iterations(), 2);
     }
 
     #[test]

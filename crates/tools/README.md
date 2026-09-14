@@ -32,13 +32,21 @@ cargo run --bin plant_previewer --features viewer
 
 # Specific seed for reproducible results
 cargo run --bin plant_previewer --features viewer -- 42
+
+# At a level-of-detail tier: hub (default), distant, or icon
+cargo run --bin plant_previewer --features viewer -- 42 distant
 ```
 
 The viewer opens a window with:
-- An orthographic camera looking at the plant from an elevated angle
-- Brown stem geometry built from generalized cylinders
-- Colored cube markers for leaves, flowers, and fruit
+- An orthographic camera framed on the plant's own bounding box
+- Stems swept as generalized cylinders — one continuous, tapering surface per
+  branch axis, not a ring pair per internode
+- Real leaf, petal and fruit surfaces, each in its own material
 - A green ground plane
+
+Geometry is built by `crates/plantgl` and handed to Fyrox through
+`apothecarys_botany::fyrox_bridge`, merged by appearance first, so the plant
+arrives as at most four draw calls.
 
 ### Console Output
 
@@ -48,25 +56,40 @@ On startup, the tool prints a summary of the generated plant:
 === Plant Preview (seed: 42) ===
 
 --- Phenotype ---
-  Branch angle:    32.5°
-  Branch length:   1.20
-  Branch thickness:0.080
-  Complexity:      4 iterations
-  Branching factor:3
+  Branch angle:    48.9°
+  Branch length:   1.05
+  Branch thickness:0.046
+  Complexity:      6 iterations
+  Branching factor:4
+  Cross-section:   profile 1
+  Taper:           Strong
+  Tropism:         elasticity 0.133
+  Axis curvature:  2.0°/segment
   ...
 
---- Mesh Statistics ---
-  Stem segments:   47
-  Vertices:        564
-  Triangles:       564
-  Leaf instances:  12
-  Flower instances:3
-  Fruit instances: 0
+--- Geometry (Hub LOD) ---
+  Symbols:         579
+  Stem segments:   27
+  Shapes:          93
+  Draw calls:      4
+  Triangles:       2232 (budget 12000)
+  Leaves:          69
+  Petals:          5
+  Fruit:           3
+
+--- Measurements ---
+  Surface area:    19.9268
+  Volume:          0.065605
+  Bounding box:    2.66 x 2.33 x 3.31  (height 2.33)
 
 --- Alchemy Effects ---
   Heal: 15 HP
   Buff: Haste for 3 turns
 ```
+
+Surface area and volume come from `plantgl`'s `MeasureDrawer`, which reads them
+off the turtle's own command sequence rather than off a mesh — the same numbers
+a harvest yield is computed from, available without building geometry.
 
 ### OBJ Export
 
@@ -76,22 +99,21 @@ The viewer automatically exports a Wavefront OBJ file on startup:
 plant_seed_42.obj
 ```
 
-This file can be opened in any 3D modeling application (Blender, MeshLab, etc.) and contains:
-- **`stems`** group — triangulated cylinder geometry for branches
-- **`leaves`** group — triangle markers at leaf positions
-- **`flowers`** group — triangle markers at flower positions
-- **`fruit`** group — triangle markers at fruit positions
+...alongside the `plant_seed_42.mtl` it references. Both are written by
+`plantgl::codec::obj` from the merged, discretised scene, so the file can be
+opened in any 3D modelling application (Blender, MeshLab, …). It carries one
+group per material — `stem`, `leaf`, `petal`, `fruit` — with real surfaces in
+each, not marker triangles.
 
-To generate an OBJ file without the viewer, use the library API:
+To generate the files without the viewer, use the library API:
 
 ```rust
 use apothecarys_tools::plant_preview::PlantPreviewData;
 
 let preview = PlantPreviewData::from_seed(42);
-let obj_string = preview.mesh.to_obj("my_plant.mtl");
-let mtl_string = preview.mesh.to_mtl();
-std::fs::write("my_plant.obj", obj_string).unwrap();
-std::fs::write("my_plant.mtl", mtl_string).unwrap();
+let files = preview.to_obj("my_plant.mtl");
+std::fs::write("my_plant.obj", files.obj).unwrap();
+std::fs::write("my_plant.mtl", files.mtl).unwrap();
 ```
 
 ## Library API
@@ -104,7 +126,8 @@ use apothecarys_tools::plant_preview::PlantPreviewData;
 let preview = PlantPreviewData::from_seed(42);
 
 // Access plant properties
-println!("Vertices: {}", preview.mesh.vertex_count());
+println!("Triangles: {}", preview.plant.triangle_count().unwrap());
+println!("Area: {}", preview.plant.measures().unwrap().surface_area);
 println!("Phenotype: {:?}", preview.phenotype);
 println!("Effects: {:?}", preview.alchemy_effects);
 
@@ -119,7 +142,7 @@ preview.print_summary();
 | `seed` | `u64` | The seed used for generation |
 | `genotype` | `PlantGenotype` | Diploid genetic data (24 gene loci) |
 | `phenotype` | `PlantPhenotype` | Expressed visual traits |
-| `mesh` | `PlantMeshData` | Vertices, indices, and organ instances |
+| `plant` | `PlantModel` | The `plantgl::Scene`, its counts, and its measurements |
 | `alchemy_effects` | `Vec<AlchemyEffect>` | Potion effects derived from genetics |
 
 ## Determinism

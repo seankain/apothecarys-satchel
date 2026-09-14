@@ -180,6 +180,8 @@ name = "apothecarys-botany"
 version = "0.1.0"
 dependencies = [
  "apothecarys-core",
+ "fyrox",
+ "plantgl",
  "rand 0.8.5",
  "ron",
  "serde",
@@ -232,6 +234,7 @@ dependencies = [
  "apothecarys-persistence",
  "apothecarys-world",
  "fyrox",
+ "plantgl",
  "rand 0.8.5",
  "serde_json",
  "uuid",
@@ -342,6 +345,7 @@ dependencies = [
  "apothecarys-dialogue",
  "apothecarys-world",
  "fyrox",
+ "plantgl",
  "rand 0.8.5",
  "ron",
  "serde",
