@@ -1,0 +1,36 @@
+[package]
+name = "apothecarys-web-demo"
+version = "0.1.0"
+edition = "2021"
+description = "A wasm entry point that grows one plant from a seed, for the browser demo in web/"
+publish = false
+
+[lib]
+# `cdylib` is what `--target wasm32-unknown-unknown` links into a `.wasm`;
+# `rlib` is what `tests/` links against, so the payload the browser decodes is
+# the same one a native `cargo test` decodes.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+apothecarys-botany = { path = "../botany" }
+apothecarys-core = { path = "../core" }
+plantgl = { path = "../plantgl" }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# `rand`'s `std` feature pulls `getrandom`, which refuses to compile for
+# `wasm32-unknown-unknown` unless a backend is chosen. Nothing here asks for
+# operating-system entropy — every plant comes from `StdRng::seed_from_u64` —
+# so the crate registers a backend that always fails rather than taking
+# `getrandom/js`, which would need wasm-bindgen's JS shim and stop the module
+# instantiating from a bare `WebAssembly.instantiateStreaming`.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["custom"] }
+# `apothecarys-core` mints item ids with `Uuid::new_v4`, and `uuid` likewise
+# refuses to build for the browser without being told where randomness comes
+# from. `rng-getrandom` routes it to `getrandom` 0.4, whose backend
+# `.cargo/config.toml` pins to `unsupported` for this target — the demo never
+# mints an item, so the call never happens. The alternative, `uuid/js`, would
+# drag wasm-bindgen in.
+uuid = { workspace = true, features = ["rng-getrandom"] }

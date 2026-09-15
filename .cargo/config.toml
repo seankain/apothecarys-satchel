@@ -1,0 +1,18 @@
+# `cargo build --target wasm32-unknown-unknown` for `crates/web-demo`, which is
+# what `web/build.sh` and the GitLab Pages job run.
+#
+# `uuid`'s `v4` feature reaches the build through `apothecarys-core`, and pulls
+# `getrandom` 0.4, which refuses to compile for `wasm32-unknown-unknown` unless
+# a backend is named. The two backends it offers for the browser are
+# `wasm_js`, which needs wasm-bindgen's JS shim, and `unsupported`, which
+# errors at run time. `unsupported` is the correct one here: nothing in the
+# demo's path calls `Uuid::new_v4` — every plant comes from
+# `StdRng::seed_from_u64` — so the call never happens, and if that ever stops
+# being true it fails loudly instead of handing out zeros.
+#
+# `rand` pulls `getrandom` 0.2, which selects its backend by Cargo feature
+# rather than by cfg; `crates/web-demo` registers the equivalent stub there.
+#
+# This applies to the wasm target only. Native builds and tests are untouched.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="unsupported"']
