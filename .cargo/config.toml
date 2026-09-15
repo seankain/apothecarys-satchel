@@ -1,5 +1,5 @@
 # `cargo build --target wasm32-unknown-unknown` for `crates/web-demo`, which is
-# what `web/build.sh` and the GitLab Pages job run.
+# what `web/build.sh` and the GitHub Pages workflow run.
 #
 # `uuid`'s `v4` feature reaches the build through `apothecarys-core`, and pulls
 # `getrandom` 0.4, which refuses to compile for `wasm32-unknown-unknown` unless

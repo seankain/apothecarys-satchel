@@ -1,0 +1,98 @@
+# Builds and publishes the plant generator demo in `web/` to GitHub Pages.
+#
+# The site is `crates/web-demo` compiled to `wasm32-unknown-unknown` plus four
+# static files, so the workflow needs nothing but the toolchain the runner
+# already has — no wasm-bindgen, no wasm-pack, no Node. `web/build.sh` is the
+# same script a contributor runs locally, so what CI publishes is what they
+# saw.
+#
+# One repository setting is required and cannot live in this file: Settings →
+# Pages → Build and deployment → Source must be set to "GitHub Actions". The
+# published page is then https://seankain.github.io/apothecarys-satchel/.
+
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Only the deploy job needs more than read access, and it asks for it itself.
+permissions:
+  contents: read
+
+env:
+  # A backtrace is worth more than the bytes it costs when a job fails.
+  RUST_BACKTRACE: "1"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The wasm boundary the page decodes, checked where a mistake is a red run
+  # rather than a blank canvas.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-test-
+
+      - run: rustup component add clippy
+      - run: cargo test --package apothecarys-web-demo
+      - run: cargo clippy --package apothecarys-web-demo --all-targets -- -D warnings
+
+  build:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-wasm-
+
+      - run: rustup target add wasm32-unknown-unknown
+      - run: web/build.sh public
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # `deploy-pages` mints an OIDC token for the Pages deployment, which is
+    # what `id-token: write` is for; nothing else in this workflow needs it.
+    permissions:
+      pages: write
+      id-token: write
+    # Serialised against itself so two pushes in quick succession cannot land
+    # out of order, and never cancelled — a half-finished deploy is worse than
+    # a queued one.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

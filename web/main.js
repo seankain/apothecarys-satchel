@@ -47,7 +47,7 @@ function fail(message, error) {
 /**
  * Instantiates the module.
  *
- * `instantiateStreaming` needs the server to send `application/wasm`; GitLab
+ * `instantiateStreaming` needs the server to send `application/wasm`; GitHub
  * Pages does, but a plain `python3 -m http.server` on an older Python may not,
  * so the `arrayBuffer` path is kept as the fallback rather than left to chance.
  */

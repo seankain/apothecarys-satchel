@@ -1,6 +1,6 @@
 // A WebGL2 view of one plant: orbit camera, two lights, a faded ground disc.
 //
-// Deliberately dependency-free. The page is served from GitLab Pages with no
+// Deliberately dependency-free. The page is served from GitHub Pages with no
 // bundler and no CDN, so everything it needs — the matrix maths, the shaders,
 // the input handling — is here, and the whole deploy is four static files plus
 // a `.wasm`.

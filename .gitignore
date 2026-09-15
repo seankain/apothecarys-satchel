@@ -20,5 +20,5 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# The GitLab Pages output assembled by web/build.sh
+# The GitHub Pages output assembled by web/build.sh
 public

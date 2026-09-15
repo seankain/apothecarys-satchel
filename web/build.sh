@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Assembles the static site the GitLab Pages job publishes.
+# Assembles the static site the GitHub Pages workflow publishes.
 #
 #   web/build.sh [output-directory]   # defaults to ./public
 #

@@ -10,7 +10,7 @@
 //!
 //! There is no wasm-bindgen. The module exports plain `extern "C"` functions
 //! and two byte buffers, so `web/main.js` instantiates the `.wasm` directly
-//! and the whole GitLab Pages build is `cargo build --target
+//! and the whole GitHub Pages build is `cargo build --target
 //! wasm32-unknown-unknown` — no `wasm-bindgen-cli`, no `wasm-pack`, no
 //! generated glue to keep in step with the Rust.
 //!

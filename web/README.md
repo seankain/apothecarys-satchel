@@ -4,7 +4,8 @@ A single page that runs the game's plant pipeline in the browser: type a seed,
 press **Regenerate**, and the same genetics → phenotype → L-system → turtle
 chain that grows a plant in the game grows one on a canvas.
 
-Published to GitLab Pages by the `pages` job in `.gitlab-ci.yml`.
+Published to GitHub Pages by `.github/workflows/pages.yml`:
+<https://seankain.github.io/apothecarys-satchel/>.
 
 ## What is here
 
