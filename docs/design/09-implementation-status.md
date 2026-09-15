@@ -34,6 +34,17 @@ plugged into `cargo run --bin game`.
 
 ## Outstanding work
 
+Each heading below has a tracking issue:
+
+| | | Issue |
+|---|---|---|
+| G1 | Wire the shipped systems into the game plugin | [#31](https://github.com/seankain/apothecarys-satchel/issues/31) |
+| G2 | Asset pipeline | [#32](https://github.com/seankain/apothecarys-satchel/issues/32) |
+| G3 | Close the garden → crafting loop | [#33](https://github.com/seankain/apothecarys-satchel/issues/33) |
+| G4 | Navmesh source | [#34](https://github.com/seankain/apothecarys-satchel/issues/34) |
+| G5 | `cargo fmt --check` in CI | [#35](https://github.com/seankain/apothecarys-satchel/issues/35) |
+| G6 | Content tables into `data/` | [#36](https://github.com/seankain/apothecarys-satchel/issues/36) |
+
 ### G1 — The game binary reaches the hub blockout and stops
 
 `crates/game/src/app.rs` runs `Menu → Hub` and nothing else. Specifically:
@@ -100,15 +111,21 @@ takes hand-built vertices and polygons, which is what every test does. A*,
 funnel smoothing and `is_walkable` are all implemented and correct — they just
 have nothing to run on in the game.
 
-### G5 — CI covers one crate of sixteen
+### G5 — CI covered one crate of sixteen
 
 `.github/workflows/pages.yml` runs `cargo test` and `cargo clippy` for
 `apothecarys-web-demo` only, then builds and deploys the page. Document 00
-lists CI as `cargo clippy`, `cargo test`, `cargo fmt --check`. Nothing today
-would catch a workspace-wide regression in a pull request.
+lists CI as `cargo clippy`, `cargo test`, `cargo fmt --check`, and nothing
+caught a workspace-wide regression in a pull request.
 
-`cargo fmt --all --check` reports 350 hunks across 90 files, so adding the
-format gate needs a reformat commit of its own rather than a flag flip.
+`.github/workflows/ci.yml`, added alongside this document, covers the build,
+clippy over all targets, the workspace test run and the release plant budget.
+All four are green today. It needs no apt step: the ALSA patch and winit's
+dlopen backends mean a bare `ubuntu-latest` compiles the Fyrox binaries.
+
+The format gate is still outstanding. `cargo fmt --all --check` reports 350
+hunks across 90 files, so turning it on needs a reformat commit of its own
+rather than a flag flip.
 
 ### G6 — Data lives in Rust, not in `data/`
 
@@ -144,7 +161,7 @@ runtime — `locations.ron` is read only by the `connection_editor` tool.
 The dependencies run one way. Assets unblock everything visual; the garden
 loop unblocks the game's premise; neither needs the other.
 
-1. **G5** — workspace CI. Cheapest, and it protects everything after it.
+1. **G5** — the workspace CI job is in; the format gate follows.
 2. **G3** — close the garden → crafting loop. Pure library work, no engine,
    no assets, and it makes the botany pipeline count for something.
 3. **G2** — asset pipeline and a player model. Unblocks G1 and G4.
