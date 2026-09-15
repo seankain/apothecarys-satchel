@@ -9,16 +9,11 @@ genetics and L-system pipeline grow a plant:
 ## Prerequisites
 
 - **Rust toolchain** (stable, 1.75+): Install via [rustup](https://rustup.rs/)
-- **System dependencies** (Linux):
-  ```bash
-  # Ubuntu/Debian
-  sudo apt-get install -y libasound2-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev pkg-config
-
-  # Fedora
-  sudo dnf install alsa-lib-devel libxcb-devel libxkbcommon-devel
-  ```
-- **macOS**: No additional system packages needed (CoreAudio is used).
-- **Windows**: No additional system packages needed.
+- **System dependencies**: none. The root `Cargo.toml` patches `alsa-sys`
+  with `crates/alsa-sys-stub`, so no ALSA headers are needed and a bare
+  `ubuntu-latest` builds the workspace. The cost is that **no build has
+  audio** — delete that `[patch]` section and install `libasound2-dev`
+  (Debian/Ubuntu) or `alsa-lib-devel` (Fedora) to get sound back.
 
 ## Project Structure
 
@@ -28,17 +23,18 @@ crates/
   game/          - Fyrox game plugin, isometric camera, main binary
   navigation/    - Navmesh pathfinding, player movement, interaction system
   inventory/     - Inventory container with slot-based storage
-  combat/        - Turn-based combat (stub)
-  party/         - Party generation and management (stub)
-  world/         - World graph and scene transitions (stub)
-  dialogue/      - YarnSpinner parser and runner (stub)
-  scripting/     - Lua scripting integration (stub)
+  combat/        - Turn-based combat (library-only)
+  party/         - Party generation and management (library-only)
+  world/         - World graph and scene transitions (library-only)
+  dialogue/      - YarnSpinner parser and runner (library-only)
+  scripting/     - Lua scripting integration (library-only)
   botany/        - Plant genetics, phenotype expression, L-systems, and the
                    turtle driver that feeds plantgl (MIT)
   plantgl/       - Geometry and turtle modelling, ported from PlantGL (CeCILL-C)
-  garden/        - Garden plot management (stub)
-  persistence/   - Save/load system (stub)
-  tools/         - Editor tooling (stub)
+  garden/        - Garden plot management (library-only)
+  persistence/   - Save/load system (library-only)
+  tools/         - Editor tooling: five Fyrox GUI binaries
+  mcp-server/    - MCP server exposing scene editing to an agent
   web-demo/      - A wasm entry point for the browser demo in `web/`
 web/             - The GitHub Pages plant generator demo: a seed box, a
                    regenerate button and the plant it grows
@@ -117,7 +113,13 @@ cargo build -p apothecarys-game
 cargo run --bin game
 ```
 
-This opens a Fyrox window with the game plugin. Currently displays an empty scene (content is being developed in phases).
+This opens a Fyrox window showing the main menu. **Start Game** enters the hub
+blockout — a ground plane, a directional light and the isometric camera — and
+that is as far as the binary currently goes. Everything else listed under
+*Project Structure* is reachable from its own tests and, for the botany chain,
+from the previewer and the web demo, but is not yet wired into the plugin.
+`docs/design/09-implementation-status.md` records exactly what is and is not
+connected.
 
 ## The Plant Generator Demo
 
@@ -185,18 +187,31 @@ cargo clippy --workspace --tests -- -D warnings
 
 The game is developed in incremental phases:
 
+"Complete" below means the code is written, tested and reachable from the
+game. "Library complete" means it is written and tested but nothing in
+`cargo run --bin game` calls it — the bulk of what is left is that wiring, not
+new systems.
+
 - **Phase 1** (Complete): Workspace setup, core types, Fyrox plugin shell
-- **Phase 2** (Complete): Isometric camera, navmesh pathfinding, player movement, interaction system, stat system, inventory
-- **Phase 3**: World graph, scene transitions, dialogue, Lua scripting
-- **Phase 4**: Party generation, combat, crafting
-- **Phase 5**: Plant genetics, L-systems, garden
-- **Phase 6**: Save/load, hub integration, UI
-- **Phase 7**: Editor tooling
-- **Phase 8**: PlantGL port — `crates/plantgl` replaces the hand-rolled plant
-  mesh generation. Complete: stems are swept generalized cylinders and organs
-  are real surfaces. See `docs/design/08-plantgl-port.md`.
+- **Phase 2** (Camera complete; navigation library complete): Isometric
+  camera, navmesh pathfinding, player movement, interaction system, stat
+  system, inventory
+- **Phase 3** (Library complete): World graph, scene transitions, dialogue,
+  Lua scripting
+- **Phase 4** (Library complete): Party generation, combat, crafting
+- **Phase 5** (Complete): Plant genetics, L-systems, garden
+- **Phase 6** (Library complete; UI is model-only): Save/load, hub
+  integration, UI
+- **Phase 7** (Complete): Editor tooling — map editor, connection editor,
+  animation viewer, dialogue tester, plant previewer
+- **Phase 8** (Complete through Phase E): PlantGL port — `crates/plantgl`
+  replaces the hand-rolled plant mesh generation. Stems are swept generalized
+  cylinders and organs are real surfaces. See
+  `docs/design/08-plantgl-port.md`; Phase F is optional and unstarted.
 
 The plant generator demo in `web/` is not a phase; it is the pipeline of Phases
 5 and 8 pointed at a canvas, so a seed can be looked at without a checkout.
 
-See `docs/design/07-task-breakdown.md` for the full task dependency graph.
+See `docs/design/07-task-breakdown.md` for the full task dependency graph, and
+`docs/design/09-implementation-status.md` for a verified per-system status and
+the outstanding work.
