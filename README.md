@@ -2,6 +2,10 @@
 
 An isometric RPG built with Rust and the [Fyrox](https://fyrox.rs/) game engine. You play as an apothecary who collects plants, breeds them using Mendelian genetics, crafts potions, and supports a procedurally-generated party through turn-based dungeon combat.
 
+The plant generator runs in a browser — type a seed and watch the game's own
+genetics and L-system pipeline grow a plant:
+**<https://seankain.github.io/apothecarys-satchel/>**
+
 ## Prerequisites
 
 - **Rust toolchain** (stable, 1.75+): Install via [rustup](https://rustup.rs/)
@@ -36,7 +40,7 @@ crates/
   persistence/   - Save/load system (stub)
   tools/         - Editor tooling (stub)
   web-demo/      - A wasm entry point for the browser demo in `web/`
-web/             - The GitLab Pages plant generator demo: a seed box, a
+web/             - The GitHub Pages plant generator demo: a seed box, a
                    regenerate button and the plant it grows
 ```
 
@@ -117,6 +121,8 @@ This opens a Fyrox window with the game plugin. Currently displays an empty scen
 
 ## The Plant Generator Demo
 
+**<https://seankain.github.io/apothecarys-satchel/>** — no checkout needed.
+
 `web/` is a single page that runs the plant pipeline in the browser: type a
 seed, press **Regenerate**, and the same chain the game runs grows a plant on
 a canvas. `crates/web-demo` is `botany` behind a C ABI compiled to
@@ -130,9 +136,10 @@ python3 -m http.server --directory public 8000   # then open localhost:8000
 ```
 
 It has to be served over HTTP — ES modules and `fetch` are both blocked on a
-`file://` origin. `.gitlab-ci.yml` runs the same script in its `pages` job, so
-what is published is what a contributor saw locally. `web/README.md` covers the
-payload layout the page decodes and why the renderer is built the way it is.
+`file://` origin. `.github/workflows/pages.yml` runs the same script on every
+push to `main`, so what is published is what a contributor saw locally.
+`web/README.md` covers the payload layout the page decodes and why the renderer
+is built the way it is.
 
 ## Running Tests
 
