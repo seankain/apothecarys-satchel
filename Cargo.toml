@@ -15,6 +15,7 @@ members = [
     "crates/tools",
     "crates/mcp-server",
     "crates/plantgl",
+    "crates/web-demo",
 ]
 resolver = "2"
 

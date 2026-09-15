@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Plant generator — The Apothecary's Satchel</title>
+    <meta
+      name="description"
+      content="A seed grows one plant through the genetics, L-system and PlantGL turtle pipeline from The Apothecary's Satchel, compiled to WebAssembly."
+    />
+    <link rel="stylesheet" href="./style.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%F0%9F%8C%BF%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <header>
+      <h1>Plant generator</h1>
+      <p>
+        One seed, run through the whole pipeline from
+        <a href="https://github.com/seankain/apothecarys-satchel">The Apothecary's Satchel</a>:
+        <code>PlantGenotype → PlantPhenotype → LSystem → [LSymbol] → plantgl::Scene</code>, compiled
+        to WebAssembly and drawn here. The same seed always grows the same plant.
+      </p>
+    </header>
+
+    <main>
+      <section class="viewport">
+        <canvas id="scene" aria-label="The generated plant. Drag to orbit, scroll to zoom."></canvas>
+        <p class="hint">Drag to orbit · scroll to zoom</p>
+      </section>
+
+      <section class="panel">
+        <form class="controls" autocomplete="off" onsubmit="return false">
+          <label for="seed">Seed</label>
+          <input
+            id="seed"
+            name="seed"
+            type="text"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            value="42"
+            spellcheck="false"
+            disabled
+          />
+          <button id="regenerate" type="submit" class="primary" disabled>Regenerate</button>
+          <button id="randomize" type="button" disabled>Random seed</button>
+        </form>
+
+        <p id="status" data-state="loading">Loading plant.wasm…</p>
+
+        <h2>Mesh</h2>
+        <dl id="stats"></dl>
+
+        <h2>Expressed traits</h2>
+        <dl id="traits"></dl>
+
+        <h2>Alchemy effects</h2>
+        <p class="note">Hidden from the player in game — the same seed decides them.</p>
+        <ul id="effects"></ul>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        The workspace is MIT, except <code>crates/plantgl</code>, a Rust translation of
+        <a href="https://github.com/openalea/plantgl">openalea/plantgl</a> governed by
+        <strong>CeCILL-C</strong>. This page links it, so it is Derivative Software under CeCILL-C
+        Article 5.3.3 and carries the Article 6.4 notice of rights with it:
+        <a href="./THIRD-PARTY-LICENSES">THIRD-PARTY-LICENSES</a>, <a href="./LICENSE">LICENSE</a>.
+      </p>
+      <p>
+        PlantGL asks to be cited: Pradal C., Boudon F., Nouguier C., Chopard J., Godin C. 2009.
+        PlantGL: A python-based geometric library for 3D plant modelling at different scales.
+        <em>Graphical Models</em>, 71: 1–21.
+      </p>
+    </footer>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

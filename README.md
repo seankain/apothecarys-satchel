@@ -35,6 +35,9 @@ crates/
   garden/        - Garden plot management (stub)
   persistence/   - Save/load system (stub)
   tools/         - Editor tooling (stub)
+  web-demo/      - A wasm entry point for the browser demo in `web/`
+web/             - The GitLab Pages plant generator demo: a seed box, a
+                   regenerate button and the plant it grows
 ```
 
 Plant generation runs `botany` → `plantgl`:
@@ -59,7 +62,7 @@ is therefore governed by the **CeCILL-C** license — see
 | Component | License |
 |---|---|
 | `crates/plantgl` | CeCILL-C |
-| Every other crate — `core`, `botany`, `game`, `garden`, `tools`, … | MIT |
+| Every other crate — `core`, `botany`, `game`, `garden`, `tools`, `web-demo`, … | MIT |
 | Root `LICENSE` | MIT |
 | Shipped game binary | MIT, with a third-party notice |
 
@@ -71,9 +74,10 @@ warranty and liability notice and a pointer to the port's source. There is no
 LGPL §4 analogue, so Rust's static linking is not a problem.
 
 It **ships with every build**, not only at release time: `crates/game/build.rs`
-copies it and the root `LICENSE` next to the executable, and
+copies it and the root `LICENSE` next to the executable,
 `crates/game/tests/licensing.rs` fails if either is missing or has drifted from
-the repository copy. So after `cargo build --release -p apothecarys-game`:
+the repository copy, and `web/build.sh` copies both into the published page.
+So after `cargo build --release -p apothecarys-game`:
 
 ```
 target/release/
@@ -111,6 +115,25 @@ cargo run --bin game
 
 This opens a Fyrox window with the game plugin. Currently displays an empty scene (content is being developed in phases).
 
+## The Plant Generator Demo
+
+`web/` is a single page that runs the plant pipeline in the browser: type a
+seed, press **Regenerate**, and the same chain the game runs grows a plant on
+a canvas. `crates/web-demo` is `botany` behind a C ABI compiled to
+`wasm32-unknown-unknown`; `web/` is the page that instantiates it. There is no
+wasm-bindgen and no bundler, so the whole build is one `cargo build` and a
+handful of copies:
+
+```bash
+web/build.sh
+python3 -m http.server --directory public 8000   # then open localhost:8000
+```
+
+It has to be served over HTTP — ES modules and `fetch` are both blocked on a
+`file://` origin. `.gitlab-ci.yml` runs the same script in its `pages` job, so
+what is published is what a contributor saw locally. `web/README.md` covers the
+payload layout the page decodes and why the renderer is built the way it is.
+
 ## Running Tests
 
 ```bash
@@ -123,6 +146,7 @@ cargo test -p apothecarys-navigation
 cargo test -p apothecarys-inventory
 cargo test -p apothecarys-game
 cargo test -p plantgl
+cargo test -p apothecarys-web-demo
 
 # Refresh the OBJ golden snapshots after a deliberate change, then read the diff
 UPDATE_GOLDEN=1 cargo test -p plantgl --test golden
@@ -164,5 +188,8 @@ The game is developed in incremental phases:
 - **Phase 8**: PlantGL port — `crates/plantgl` replaces the hand-rolled plant
   mesh generation. Complete: stems are swept generalized cylinders and organs
   are real surfaces. See `docs/design/08-plantgl-port.md`.
+
+The plant generator demo in `web/` is not a phase; it is the pipeline of Phases
+5 and 8 pointed at a canvas, so a seed can be looked at without a checkout.
 
 See `docs/design/07-task-breakdown.md` for the full task dependency graph.
