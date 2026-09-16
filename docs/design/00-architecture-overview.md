@@ -53,6 +53,9 @@ A 3D isometric RPG where the player is an apothecary who explores dungeons with 
 
 ## Crate Organization
 
+Entries marked **(planned)** are described here but are not in the tree yet;
+`docs/design/09-implementation-status.md` says what is outstanding and why.
+
 ```
 apothecarys-satchel/
 ├── Cargo.toml                    # Workspace root
@@ -60,8 +63,11 @@ apothecarys-satchel/
 │   ├── game/                     # Main game binary
 │   │   ├── src/
 │   │   │   ├── main.rs
-│   │   │   ├── app.rs            # Game plugin for Fyrox
-│   │   │   ├── states/           # Game states (menu, hub, dungeon, combat)
+│   │   │   ├── app.rs            # Game plugin; GameState enum, state entry
+│   │   │   ├── camera.rs         # Isometric camera
+│   │   │   ├── hub.rs            # Hub state: recruitment, crafting, dungeon
+│   │   │   ├── hub_scene.rs      # Hub blockout scene
+│   │   │   ├── garden_scene.rs   # Garden plot grid and plant nodes
 │   │   │   └── ui/               # HUD, menus, inventory screens
 │   │   └── Cargo.toml
 │   │
@@ -77,8 +83,8 @@ apothecarys-satchel/
 │   ├── navigation/               # Pathfinding, click-to-move, WASD
 │   │   ├── src/
 │   │   │   ├── lib.rs
-│   │   │   ├── navmesh.rs        # Navigation mesh generation
-│   │   │   ├── pathfinding.rs    # A* on navmesh
+│   │   │   ├── navmesh.rs        # Navmesh, A* and funnel smoothing
+│   │   │   ├── interaction.rs    # Hover, click, interaction range
 │   │   │   └── input.rs          # Input → movement translation
 │   │   └── Cargo.toml
 │   │
@@ -87,8 +93,8 @@ apothecarys-satchel/
 │   │   │   ├── lib.rs
 │   │   │   ├── turn_manager.rs   # Turn order, phase management
 │   │   │   ├── actions.rs        # Attack, defend, skill, item use
-│   │   │   ├── ai.rs             # Autonomous party member decisions
-│   │   │   └── status.rs         # Buffs, debuffs, status effects
+│   │   │   └── ai.rs             # Autonomous party member decisions
+│   │   │                         # (status effects live in core/stats.rs)
 │   │   └── Cargo.toml
 │   │
 │   ├── party/                    # Party member generation, management
@@ -104,9 +110,8 @@ apothecarys-satchel/
 │   │   ├── src/
 │   │   │   ├── lib.rs
 │   │   │   ├── container.rs      # Generic inventory container
-│   │   │   ├── crafting.rs       # Potion/medicine recipes
-│   │   │   ├── items.rs          # Item instances with genetic data
-│   │   │   └── interaction.rs    # Pickup, use, give mechanics
+│   │   │   └── crafting.rs       # Potion/medicine recipes
+│   │   │                         # (item types live in core/items.rs)
 │   │   └── Cargo.toml
 │   │
 │   ├── botany/                   # Plant genetics and the L-system driver (MIT)
@@ -141,8 +146,7 @@ apothecarys-satchel/
 │   │   ├── src/
 │   │   │   ├── lib.rs
 │   │   │   ├── parser.rs         # .yarn file parser
-│   │   │   ├── runner.rs         # Dialogue state machine
-│   │   │   └── commands.rs       # Yarn commands → game actions
+│   │   │   └── runner.rs         # Dialogue state machine and CommandRegistry
 │   │   └── Cargo.toml
 │   │
 │   ├── scripting/                # Lua scripting integration
@@ -170,16 +174,25 @@ apothecarys-satchel/
 │   │   │   └── transitions.rs    # Scene transitions
 │   │   └── Cargo.toml
 │   │
-│   └── tools/                    # Editor and testing tools
-│       ├── src/
-│       │   ├── lib.rs
-│       │   ├── map_editor.rs     # Mesh placement tool
-│       │   ├── connection_editor.rs # Location graph editor
-│       │   ├── animation_viewer.rs  # Animation preview/test
-│       │   └── dialogue_tester.rs   # Dialogue tree tester
-│       └── Cargo.toml
+│   ├── tools/                    # Editor and testing tools
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── map_editor.rs     # Mesh placement tool
+│   │   │   ├── connection_editor.rs # Location graph editor
+│   │   │   ├── animation_viewer.rs  # Animation preview/test
+│   │   │   ├── dialogue_tester.rs   # Dialogue tree tester
+│   │   │   ├── plant_preview.rs     # Plant generation preview
+│   │   │   └── bin/              # One Fyrox GUI binary per tool
+│   │   └── Cargo.toml
+│   │
+│   ├── mcp-server/               # MCP server for scene editing from an agent
+│   ├── web-demo/                 # wasm entry point for the browser demo
+│   └── alsa-sys-stub/            # Patched over alsa-sys; audio is stubbed out
 │
-├── assets/
+├── web/                          # The GitHub Pages plant generator demo
+├── tools/                        # Dev harnesses: differential, obj-render
+│
+├── assets/                       # (planned — nothing loads glTF/FBX yet)
 │   ├── models/                   # .glTF / .fbx files
 │   ├── textures/
 │   ├── animations/               # Embedded in model files
@@ -192,11 +205,11 @@ apothecarys-satchel/
 │   └── design/                   # These design documents
 │
 └── data/
-    ├── items.ron                  # Item definitions (RON format)
-    ├── recipes.ron                # Crafting recipes
-    ├── plant_genetics.ron         # Base genetic parameter ranges
-    ├── party_templates.ron        # Party member generation tables
-    └── locations.ron              # World graph definition
+    ├── locations.ron              # World graph definition
+    ├── items.ron                  # (planned — hardcoded in core/items.rs)
+    ├── recipes.ron                # (planned — hardcoded in RecipeBook::default)
+    ├── plant_genetics.ron         # (planned — hardcoded in botany/genetics.rs)
+    └── party_templates.ron        # (planned — hardcoded in party/generation.rs)
 ```
 
 ## Game States
@@ -249,7 +262,7 @@ Assets (.gltf, .fbx, .yarn, .lua, .ron)
 | Logging | `tracing` crate with `tracing-subscriber` |
 | Configuration | RON files loaded at startup, hot-reloadable in dev |
 | Testing | Unit tests per crate, integration tests in `game` crate |
-| CI | `cargo clippy`, `cargo test`, `cargo fmt --check` |
+| CI | `cargo clippy`, `cargo test`, `cargo fmt --check`. The format gate is not enabled yet — see 09 §G5 |
 
 ## Design Document Index
 
@@ -263,3 +276,5 @@ Assets (.gltf, .fbx, .yarn, .lua, .ron)
 | 05 | [Dialogue & Scripting & Persistence](05-dialogue-scripting-persistence.md) | Yarn parser, Lua VM, save/load |
 | 06 | [Editor Tooling](06-editor-tooling.md) | Map editor, animation viewer, dialogue tester |
 | 07 | [Task Breakdown](07-task-breakdown.md) | Concrete tasks, dependencies, ordering |
+| 08 | [PlantGL Port](08-plantgl-port.md) | The `crates/plantgl` translation, licensing, phases |
+| 09 | [Implementation Status](09-implementation-status.md) | What is shipped, what is library-only, what is outstanding |

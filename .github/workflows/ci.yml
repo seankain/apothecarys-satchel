@@ -1,0 +1,68 @@
+# Workspace build, lint and test.
+#
+# `pages.yml` covers `apothecarys-web-demo` and publishes the plant demo; it
+# says nothing about the other fifteen crates, so nothing today catches a
+# workspace-wide regression in a pull request. This does.
+#
+# No apt step: the root `Cargo.toml` patches `alsa-sys` with
+# `crates/alsa-sys-stub`, and winit's X11 and xkbcommon backends dlopen at run
+# time rather than linking at build time, so a bare `ubuntu-latest` compiles
+# the whole workspace — including the Fyrox binaries — with no dev headers.
+#
+# `cargo fmt --all --check` is deliberately absent. It currently reports 350
+# hunks across 90 files, so turning it on needs a reformat commit of its own
+# rather than a flag flip; see docs/design/09-implementation-status.md §G5.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUST_BACKTRACE: "1"
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-ci-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-ci-
+
+      - run: rustup component add clippy
+
+      - name: Build
+        run: cargo build --workspace --all-targets
+
+      # Warnings are errors here, and the tests are linted too — most of the
+      # workspace's code lives in `#[cfg(test)]` modules.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      # The per-plant budget only means anything with optimisations on, so it
+      # is a separate release build rather than part of the debug run above.
+      - name: Plant performance budget
+        run: cargo test --release -p apothecarys-botany --test budget

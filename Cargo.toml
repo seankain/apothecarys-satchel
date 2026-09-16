@@ -28,14 +28,14 @@ fyrox = "0.36"
 nalgebra = "0.33"
 rand = "0.8"
 
-# To build without ALSA (no sound) on platforms where libasound2-dev is
-# unavailable, uncomment the [patch] section below.  Alternatively, pass it on
-# the command line without editing this file:
+# The ALSA stub is active for every build in this workspace, which is why no
+# `libasound2-dev` is needed to compile the game on Linux.  The stub makes
+# snd_pcm_open return an error so Fyrox gracefully skips audio initialisation;
+# everything else (rendering, input, physics) works normally.
 #
-#   cargo build --config 'patch.crates-io.alsa-sys.path="crates/alsa-sys-stub"'
-#
-# The stub makes snd_pcm_open return an error so Fyrox gracefully skips audio
-# initialisation.  Everything else (rendering, input, physics) works normally.
+# The trade-off is that there is no sound, in any build, including release.
+# To get audio back, delete the [patch] section below and install the ALSA
+# headers (`libasound2-dev` on Debian/Ubuntu, `alsa-lib-devel` on Fedora).
 
 [patch.crates-io]
 alsa-sys = { path = "crates/alsa-sys-stub" }
